@@ -40,7 +40,7 @@ def prepare_training_data(
     # Remove rows with missing target
     df_clean = df[df[target_col].notna()].copy()
     
-    X = df_clean[available_features]
+    X = df_clean[available_features].copy()
     y = df_clean[target_col]
     
     # Split by session to avoid data leakage
@@ -49,12 +49,34 @@ def prepare_training_data(
         train_sessions = sessions[:int(len(sessions) * (1 - test_size))]
         
         train_mask = df_clean['session_key'].isin(train_sessions)
-        X_train, X_test = X[train_mask], X[~train_mask]
+        X_train, X_test = X[train_mask].copy(), X[~train_mask].copy()
         y_train, y_test = y[train_mask], y[~train_mask]
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=config.RANDOM_SEED
         )
+
+    # Ensure categorical features have consistent dtype and categories across splits
+    cat_cols = [c for c in config.CATEGORICAL_FEATURES if c in X_train.columns]
+    for col in cat_cols:
+        # Use categories observed in training split to lock category ordering
+        cats = (
+            X_train[col]
+            .astype(str)
+            .where(X_train[col].notna(), other=None)
+            .dropna()
+            .unique()
+            .tolist()
+        )
+        # Keep a stable order (sorted) for reproducibility
+        try:
+            cats = sorted(cats)
+        except Exception:
+            pass
+
+        # Cast to category with fixed categories
+        X_train[col] = pd.Categorical(X_train[col].astype(str), categories=cats)
+        X_test[col] = pd.Categorical(X_test[col].astype(str), categories=cats)
     
     return X_train, X_test, y_train, y_test
 
@@ -132,7 +154,15 @@ def predict(model: lgb.Booster, X: pd.DataFrame) -> np.ndarray:
     Returns:
         Predictions array
     """
-    return model.predict(X)
+    # LightGBM requires categorical features to match training categories.
+    # If the Booster has feature names, we can attempt safe casting for known categorical columns.
+    Xp = X.copy()
+    cat_cols = [c for c in config.CATEGORICAL_FEATURES if c in Xp.columns]
+    for col in cat_cols:
+        if not pd.api.types.is_categorical_dtype(Xp[col]):
+            # Convert to string category (best-effort). Categories should have been aligned upstream.
+            Xp[col] = Xp[col].astype('category')
+    return model.predict(Xp, validate_features=False)
 
 
 def evaluate(
