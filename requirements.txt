@@ -18,8 +18,8 @@ shap==0.44.0
 # Progress tracking
 tqdm==4.66.1
 
-# Web app
-streamlit==1.29.0
+# Web app (requires st.page_link)
+streamlit==1.38.0
 
 # Utilities
 pydantic==2.5.2
