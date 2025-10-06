@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 
 from f1ts import config, io_flat, utils
+from pathlib import Path as _Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -140,6 +141,62 @@ with col2:
     else:
         driver_b = None
 
+@st.cache_data
+def _load_session_meta_and_lookups():
+    """Load sessions meta and pit loss lookup tables."""
+    paths = config.paths()
+    sessions = io_flat.read_csv(paths['data_raw'] / 'sessions.csv', verbose=False)
+    lookups_dir = paths['data_lookups']
+    # Prefer computed lookups if present, else fall back to seeded priors
+    pitloss_computed = lookups_dir / 'pitloss_computed.csv'
+    pitloss_priors = lookups_dir / 'pitloss_by_circuit.csv'
+    hazard_path = (
+        (lookups_dir / 'hazard_computed.csv')
+        if (lookups_dir / 'hazard_computed.csv').exists()
+        else (lookups_dir / 'hazard_priors.csv')
+    )
+    pitloss_lookup_computed = pd.read_csv(pitloss_computed) if pitloss_computed.exists() else pd.DataFrame()
+    pitloss_lookup_priors = pd.read_csv(pitloss_priors) if pitloss_priors.exists() else pd.DataFrame()
+    hazards_lookup = pd.read_csv(hazard_path) if hazard_path.exists() else pd.DataFrame()
+    return sessions, pitloss_lookup_computed, pitloss_lookup_priors, hazards_lookup
+
+
+def _get_circuit_pit_loss(session_key: str, sessions_df: pd.DataFrame, pitloss_lookup_computed: pd.DataFrame, pitloss_lookup_priors: pd.DataFrame) -> float:
+    """Return pit loss for the circuit of the provided session_key, fallback to 24.0s."""
+    try:
+        circuit = sessions_df.loc[sessions_df['session_key'] == session_key, 'circuit_name'].iloc[0]
+    except Exception:
+        return 24.0
+    # Try computed first
+    for lookup in (pitloss_lookup_computed, pitloss_lookup_priors):
+        if 'circuit_name' in lookup.columns and 'pit_loss_s' in lookup.columns:
+            row = lookup.loc[lookup['circuit_name'] == circuit]
+            if not row.empty and pd.notna(row.iloc[0]['pit_loss_s']):
+                return float(row.iloc[0]['pit_loss_s'])
+    return 24.0
+
+
+def _stint_first_last3_delta_s(driver: str, stints_df: pd.DataFrame, laps_df: pd.DataFrame) -> float:
+    """Compute last3 - first3 avg lap time (s) for driver's most recent stint; fallback to 1.5s if unavailable."""
+    try:
+        d_stints = stints_df[stints_df['driver'] == driver]
+        if d_stints.empty:
+            return 1.5
+        latest = d_stints.sort_values('end_lap').iloc[-1]
+        start_lap, end_lap = int(latest['start_lap']), int(latest['end_lap'])
+        d_laps = laps_df[(laps_df['driver'] == driver) & (laps_df['lap'] >= start_lap) & (laps_df['lap'] <= end_lap)]
+        d_laps = d_laps.sort_values('lap')
+        if len(d_laps) < 6:
+            return 1.5
+        first3_avg_ms = d_laps.iloc[:3]['lap_time_ms'].mean()
+        last3_avg_ms = d_laps.iloc[-3:]['lap_time_ms'].mean()
+        delta_s = max((last3_avg_ms - first3_avg_ms) / 1000.0, 0.0)
+        # Cap to a reasonable range to avoid outliers
+        return float(np.clip(delta_s, 0.5, 4.0))
+    except Exception:
+        return 1.5
+
+
 if driver_a and driver_b:
     st.info(f"**Undercut Analysis:** {driver_a} vs {driver_b}")
     st.markdown("""
@@ -150,12 +207,17 @@ if driver_a and driver_b:
     - Tyre degradation models
     - Pit loss timing
     """)
+    # Data-driven calculation: session-specific pit loss and driver-specific tyre fade
+    sessions_meta, pitloss_lookup_computed, pitloss_lookup_priors, _ = _load_session_meta_and_lookups()
+    pit_loss_estimate = _get_circuit_pit_loss(session_key, sessions_meta, pitloss_lookup_computed, pitloss_lookup_priors)
     
-    # Simple calculation
-    pit_loss_estimate = 24.0  # seconds
-    fresh_tyre_advantage = 1.5  # seconds per lap for first 3 laps
+    # Estimate fresh-tyre advantage over first 3 laps from the most recent stint dynamics
+    adv3_driver_a = _stint_first_last3_delta_s(driver_a, stints, laps)
+    adv3_driver_b = _stint_first_last3_delta_s(driver_b, stints, laps)
+    # Use the opponent's fade signal as well; pick the stronger fade as representative of undercut window
+    fresh_advantage_3laps = max(adv3_driver_a, adv3_driver_b, 1.0)  # ensure minimum baseline
     
-    undercut_gain = (fresh_tyre_advantage * 3) - pit_loss_estimate
+    undercut_gain = fresh_advantage_3laps - pit_loss_estimate
     
     st.metric("Estimated Undercut Gain", f"{undercut_gain:.1f}s")
     

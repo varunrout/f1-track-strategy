@@ -28,9 +28,9 @@ def prepare_pitloss_data(
     """
     df = pitstops_df.copy()
     
-    # Convert pit time to seconds
+    # Convert pit time to seconds (handle negatives seen in some raw files)
     if 'pit_time_total_ms' in df.columns:
-        df['pit_loss_s'] = df['pit_time_total_ms'] / 1000.0
+        df['pit_loss_s'] = (df['pit_time_total_ms'].abs()) / 1000.0
     
     # Add circuit info
     if 'circuit_name' in sessions_df.columns:
@@ -39,7 +39,8 @@ def prepare_pitloss_data(
     
     # Remove outliers (extremely long or short stops)
     if 'pit_loss_s' in df.columns:
-        df = df[(df['pit_loss_s'] > 15) & (df['pit_loss_s'] < 60)].copy()
+        # Keep a broad but reasonable window; many datasets can be noisy
+        df = df[(df['pit_loss_s'] >= 5) & (df['pit_loss_s'] <= 80)].copy()
     
     return df
 

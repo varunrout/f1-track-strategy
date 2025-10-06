@@ -43,7 +43,12 @@ notebooks:
 
 app:
 	@echo "Starting Streamlit app..."
-	streamlit run app/Home.py
+	@if [ -x .venv/bin/python ]; then \
+		echo "Using virtualenv"; \
+		PYTHONPATH=src .venv/bin/python -m streamlit run app/Home.py; \
+	else \
+		PYTHONPATH=src python -m streamlit run app/Home.py; \
+	fi
 
 clean:
 	@echo "Cleaning up..."
@@ -60,11 +65,11 @@ test: validate
 # Data pipeline shortcuts using CLI
 ingest:
 	@echo "Running data ingestion..."
-	python -m f1ts.cli ingest --season 2023 --rounds 1-10
+	PYTHONPATH=src python -m f1ts.cli ingest --season 2023 --rounds 1-10
 
 pipeline:
 	@echo "Running complete pipeline..."
-	python -m f1ts.cli pipeline --season ${season} --rounds ${rounds}
+	PYTHONPATH=src python -m f1ts.cli pipeline --season ${season} --rounds ${rounds}
 
 # Legacy notebook-based pipeline
 notebooks-ingest:

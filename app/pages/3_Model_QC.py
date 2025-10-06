@@ -97,9 +97,24 @@ st.subheader("⏱️ Pit Loss Model")
 st.markdown("""
 **Model Type:** Circuit-average baseline  
 **Target:** Pit stop time loss (seconds)
-
-*Metrics will be available after running notebook 06.*
 """)
+
+# Show lookup if available
+try:
+    lookups_dir = config.paths()['data_lookups']
+    pitloss_path = (
+        (lookups_dir / 'pitloss_computed.csv')
+        if (lookups_dir / 'pitloss_computed.csv').exists()
+        else (lookups_dir / 'pitloss_by_circuit.csv')
+    )
+    if pitloss_path.exists():
+        pitloss_df = pd.read_csv(pitloss_path)
+        st.dataframe(pitloss_df, use_container_width=True)
+        st.success(f"✓ Loaded pit loss lookup: {pitloss_path.name}")
+    else:
+        st.info("Pit loss lookup not found. Run notebook 06 to generate it.")
+except Exception as e:
+    st.warning(f"Could not load pit loss lookup: {e}")
 
 st.markdown("---")
 
@@ -109,9 +124,24 @@ st.subheader("🚨 Hazard Model")
 st.markdown("""
 **Model Type:** Historical frequency baseline  
 **Target:** Safety car / VSC probability
-
-*Metrics will be available after running notebook 07.*
 """)
+
+# Show hazard priors if available
+try:
+    lookups_dir = config.paths()['data_lookups']
+    hazard_path = (
+        (lookups_dir / 'hazard_computed.csv')
+        if (lookups_dir / 'hazard_computed.csv').exists()
+        else (lookups_dir / 'hazard_priors.csv')
+    )
+    if hazard_path.exists():
+        hazard_df = pd.read_csv(hazard_path)
+        st.dataframe(hazard_df, use_container_width=True)
+        st.success(f"✓ Loaded hazard lookup: {hazard_path.name}")
+    else:
+        st.info("Hazard priors not found. Run notebook 07 to generate them.")
+except Exception as e:
+    st.warning(f"Could not load hazard lookup: {e}")
 
 st.markdown("---")
 
