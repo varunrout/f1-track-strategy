@@ -1,0 +1,29 @@
+# Core data processing
+pandas==2.1.4
+numpy==1.26.2
+pyarrow==14.0.1
+
+# F1 data
+fastf1==3.2.0
+
+# ML & modeling
+scikit-learn==1.3.2
+lightgbm==4.1.0
+
+# Visualization
+matplotlib==3.8.2
+seaborn==0.13.0
+shap==0.44.0
+
+# Progress tracking
+tqdm==4.66.1
+
+# Web app (requires st.page_link)
+streamlit==1.38.0
+
+# Utilities
+pydantic==2.5.2
+
+# Jupyter
+jupyter==1.0.0
+ipykernel==6.27.1

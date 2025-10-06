@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, copilot/** ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest ruff mypy
+    
+    - name: Lint with ruff
+      run: |
+        ruff check src/ --select E,F,W --ignore F401,F403,E501
+      continue-on-error: true
+    
+    - name: Type check with mypy
+      run: |
+        mypy src/f1ts --ignore-missing-imports --no-strict-optional
+      continue-on-error: true
+    
+    - name: Run tests
+      run: |
+        python tests/test_modules.py
+    
+    - name: Validate project structure
+      run: |
+        python validate_project.py
