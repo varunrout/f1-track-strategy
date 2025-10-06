@@ -1,2 +1,2 @@
-circuit_name,pit_loss_s
-Austrian Grand Prix,77.718
+circuit_name,pit_loss_s,pit_loss_std,n_stops
+Austrian Grand Prix,77.718,,1
