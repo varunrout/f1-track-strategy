@@ -25,6 +25,11 @@ wheels/
 venv/
 ENV/
 env/
+.venv-*/
+
+# Env files
+.env
+.env.*
 
 # Jupyter
 .ipynb_checkpoints
@@ -32,16 +37,19 @@ env/
 
 # Data files (large)
 data/raw/*.parquet
+data/raw/*.csv
 data/interim/*.parquet
 data/processed/*.parquet
 data/features/*.parquet
 data/features/app_export/
+data/raw/.fastf1_cache/
 
 # Keep structure but ignore large files
 !data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 !data/features/.gitkeep
+!data/raw/.gitkeep
 
 # Models (can be large)
 models/*.pkl
