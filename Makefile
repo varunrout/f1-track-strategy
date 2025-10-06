@@ -57,18 +57,27 @@ test: validate
 	@echo "Running tests..."
 	@echo "✓ All tests passed!"
 
-# Data pipeline shortcuts
+# Data pipeline shortcuts using CLI
 ingest:
+	@echo "Running data ingestion..."
+	python -m f1ts.cli ingest --season 2023 --rounds 1-10
+
+pipeline:
+	@echo "Running complete pipeline..."
+	python -m f1ts.cli pipeline --season ${season} --rounds ${rounds}
+
+# Legacy notebook-based pipeline
+notebooks-ingest:
 	@echo "Running data ingestion notebook..."
 	jupyter nbconvert --to notebook --execute notebooks/01_ingest_fastf1.ipynb
 
-features:
+notebooks-features:
 	@echo "Running feature engineering pipeline..."
 	jupyter nbconvert --to notebook --execute notebooks/02_clean_normalize.ipynb
 	jupyter nbconvert --to notebook --execute notebooks/03_build_foundation_sets.ipynb
 	jupyter nbconvert --to notebook --execute notebooks/04_features_stint_lap.ipynb
 
-train:
+notebooks-train:
 	@echo "Running model training pipeline..."
 	jupyter nbconvert --to notebook --execute notebooks/05_model_degradation.ipynb
 	jupyter nbconvert --to notebook --execute notebooks/06_model_pitloss.ipynb

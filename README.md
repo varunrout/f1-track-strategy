@@ -34,7 +34,28 @@ pip install -r requirements.txt
 export PYTHONHASHSEED=0
 ```
 
-### 2. Run Notebooks (in order)
+### 2. Run Data Pipeline (Two Options)
+
+#### Option A: Using CLI (Recommended)
+
+```bash
+# Run complete pipeline for 2023 season, rounds 1-10
+python -m f1ts.cli pipeline --season 2023 --rounds 1-10
+
+# Or run individual steps:
+python -m f1ts.cli ingest --season 2023 --rounds 1-10
+python -m f1ts.cli clean
+python -m f1ts.cli foundation
+python -m f1ts.cli features
+python -m f1ts.cli model-deg
+python -m f1ts.cli pitloss
+python -m f1ts.cli hazards
+python -m f1ts.cli optimize
+python -m f1ts.cli backtest
+python -m f1ts.cli export
+```
+
+#### Option B: Using Notebooks
 
 ```bash
 # Start Jupyter
@@ -42,7 +63,7 @@ jupyter lab
 
 # Execute notebooks in sequence:
 # 00_setup_env.ipynb         - Verify installation
-# 01_ingest_fastf1.ipynb     - Download race data
+# 01_ingest_fastf1.ipynb     - Download race data (now fetches rounds 1-10)
 # 02_clean_normalize.ipynb   - Clean and standardize
 # 03_build_foundation_sets.ipynb - Build base tables
 # 04_features_stint_lap.ipynb    - Engineer features
@@ -54,7 +75,17 @@ jupyter lab
 # 10_export_for_app.ipynb        - Export for Streamlit
 ```
 
-### 3. Launch Streamlit App
+### 3. Using Makefile (Alternative)
+
+```bash
+make setup      # Create venv and install
+make validate   # Check project structure
+make pipeline season=2023 rounds=1-10  # Run complete pipeline via CLI
+make notebooks  # Start Jupyter Lab
+make app        # Launch Streamlit
+```
+
+### 4. Launch Streamlit App
 
 ```bash
 streamlit run app/Home.py
@@ -200,7 +231,21 @@ Predicts probability of safety car/VSC in next N laps:
 
 ## 🔧 How to Retrain Models
 
-Models are retrained automatically when running notebooks 05-07. To retrain manually:
+Models are retrained automatically when running notebooks 05-07 or via CLI commands.
+
+### Using CLI (Recommended)
+
+```bash
+# Train all models
+python -m f1ts.cli model-deg
+python -m f1ts.cli pitloss
+python -m f1ts.cli hazards
+
+# Or use pipeline command
+python -m f1ts.cli pipeline --season 2023 --rounds 1-10
+```
+
+### Using Python API
 
 ```python
 from src.f1ts import features, models_degradation, io_flat
@@ -212,12 +257,40 @@ df = io_flat.read_parquet('data/features/stint_features.parquet')
 X = df[features.FEATURE_COLS]
 y = df['target_deg_ms']
 
-# Train model
+# Train model with cross-validation (new in v0.2)
+model, metrics = models_degradation.train_with_cv(
+    X, y, 
+    groups=df['session_key'],
+    n_splits=3
+)
+
+# Or use simple train
 model = models_degradation.train(X, y, cat_cols=['compound', 'circuit_name'])
 
 # Save
 io_flat.save_model(model, 'models/degradation_v1.pkl')
 ```
+
+## 📊 New Features in v0.2
+
+### Enhanced Feature Engineering
+- **Better rolling windows**: Added `min_periods` for robust early-stint handling
+- **Expanded features**: Driver baselines, stint position, compound interactions, weather interactions
+- **NA handling**: Explicit policy with configurable imputation
+
+### Improved Models
+- **GroupKFold CV**: Degradation model now uses grouped cross-validation by session
+- **Hyperparameter tuning**: Basic grid search over key LightGBM parameters
+- **Per-group metrics**: Evaluate model performance by compound and circuit
+
+### CLI Interface
+- **Complete pipeline**: `python -m f1ts.cli pipeline --season 2023 --rounds 1-10`
+- **Individual commands**: Run any pipeline step independently
+- **Flexible ingestion**: Specify rounds as ranges (1-10) or lists (1,2,3,8)
+
+### Testing & CI
+- **Unit tests**: Tests for features, validation, and data cleaning
+- **CI workflow**: Automated linting, type checking, and testing on push
 
 ## 🧪 Validation
 

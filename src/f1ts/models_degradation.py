@@ -5,9 +5,9 @@ Predicts lap time increase due to tyre wear.
 
 import numpy as np
 import pandas as pd
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 import lightgbm as lgb
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from . import config
@@ -204,6 +204,201 @@ def evaluate(
     print(f"  Samples: {len(y):,}")
     
     return metrics
+
+
+def train_with_cv(
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    cat_cols: Optional[List[str]] = None,
+    n_splits: int = 3,
+    param_grid: Optional[Dict] = None
+) -> Tuple[lgb.Booster, Dict]:
+    """
+    Train LightGBM model with GroupKFold cross-validation.
+    
+    Args:
+        X: Feature DataFrame
+        y: Target series
+        groups: Group labels for GroupKFold (e.g., session_key)
+        cat_cols: Categorical feature columns
+        n_splits: Number of CV splits
+        param_grid: Optional parameter grid for tuning
+    
+    Returns:
+        Tuple of (best model, cv metrics)
+    """
+    if cat_cols is None:
+        cat_cols = [col for col in config.CATEGORICAL_FEATURES if col in X.columns]
+    
+    # Convert categorical columns
+    X_train = X.copy()
+    for col in cat_cols:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype('category')
+    
+    # Default parameter grid if none provided
+    if param_grid is None:
+        param_grid = {
+            'num_leaves': [31, 63],
+            'min_data_in_leaf': [20, 50],
+            'learning_rate': [0.05, 0.1],
+            'feature_fraction': [0.8, 0.9],
+        }
+    
+    # Base parameters
+    base_params = {
+        'objective': 'regression',
+        'metric': 'mae',
+        'boosting_type': 'gbdt',
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'seed': config.LIGHTGBM_SEED,
+    }
+    
+    # Group K-Fold
+    gkf = GroupKFold(n_splits=n_splits)
+    
+    # Simple grid search
+    best_mae = float('inf')
+    best_params = None
+    best_model = None
+    cv_results = []
+    
+    print(f"Running GroupKFold CV with {n_splits} splits...")
+    
+    # Try a few parameter combinations
+    from itertools import product
+    param_combinations = [
+        dict(zip(param_grid.keys(), v))
+        for v in product(*param_grid.values())
+    ]
+    
+    for params in param_combinations[:4]:  # Limit to 4 combinations for speed
+        fold_maes = []
+        
+        for fold, (train_idx, val_idx) in enumerate(gkf.split(X_train, y, groups)):
+            X_fold_train = X_train.iloc[train_idx]
+            y_fold_train = y.iloc[train_idx]
+            X_fold_val = X_train.iloc[val_idx]
+            y_fold_val = y.iloc[val_idx]
+            
+            # Merge parameters
+            fold_params = {**base_params, **params}
+            
+            # Create dataset
+            train_data = lgb.Dataset(
+                X_fold_train,
+                label=y_fold_train,
+                categorical_feature=cat_cols,
+                free_raw_data=False
+            )
+            
+            val_data = lgb.Dataset(
+                X_fold_val,
+                label=y_fold_val,
+                categorical_feature=cat_cols,
+                reference=train_data,
+                free_raw_data=False
+            )
+            
+            # Train
+            model = lgb.train(
+                fold_params,
+                train_data,
+                num_boost_round=200,
+                valid_sets=[val_data],
+                valid_names=['val'],
+                callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)]
+            )
+            
+            # Evaluate
+            y_pred = model.predict(X_fold_val)
+            mae = mean_absolute_error(y_fold_val, y_pred)
+            fold_maes.append(mae)
+        
+        avg_mae = np.mean(fold_maes)
+        
+        if avg_mae < best_mae:
+            best_mae = avg_mae
+            best_params = params
+            
+            # Retrain on full data with best params
+            full_params = {**base_params, **params}
+            train_data = lgb.Dataset(
+                X_train,
+                label=y,
+                categorical_feature=cat_cols,
+                free_raw_data=False
+            )
+            best_model = lgb.train(
+                full_params,
+                train_data,
+                num_boost_round=200,
+                valid_sets=[train_data],
+                valid_names=['train'],
+                callbacks=[lgb.log_evaluation(0)]
+            )
+        
+        cv_results.append({
+            'params': params,
+            'cv_mae_ms': avg_mae,
+            'cv_mae_s': avg_mae / 1000.0
+        })
+    
+    print(f"\n✓ Best CV MAE: {best_mae/1000.0:.3f}s")
+    print(f"  Best params: {best_params}")
+    
+    metrics = {
+        'cv_mae_ms': best_mae,
+        'cv_mae_s': best_mae / 1000.0,
+        'best_params': best_params,
+        'cv_results': cv_results,
+        'n_splits': n_splits,
+    }
+    
+    return best_model, metrics
+
+
+def evaluate_by_group(
+    model: lgb.Booster,
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.DataFrame,
+    by: List[str] = ['compound', 'circuit_name']
+) -> pd.DataFrame:
+    """
+    Evaluate model performance by groups (compound, circuit, etc.).
+    
+    Args:
+        model: Trained model
+        X: Feature DataFrame
+        y: True target values
+        groups: DataFrame with grouping columns
+        by: List of columns to group by
+    
+    Returns:
+        DataFrame with per-group metrics
+    """
+    y_pred = predict(model, X)
+    
+    # Combine predictions with groups
+    results = groups.copy()
+    results['y_true'] = y.values
+    results['y_pred'] = y_pred
+    results['abs_error'] = np.abs(y.values - y_pred)
+    
+    # Group and aggregate
+    group_metrics = results.groupby(by).agg({
+        'abs_error': ['mean', 'std', 'count']
+    }).reset_index()
+    
+    group_metrics.columns = by + ['mae_ms', 'std_ms', 'n_samples']
+    group_metrics['mae_s'] = group_metrics['mae_ms'] / 1000.0
+    group_metrics['std_s'] = group_metrics['std_ms'] / 1000.0
+    
+    return group_metrics
 
 
 def train_and_evaluate(

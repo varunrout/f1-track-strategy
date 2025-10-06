@@ -12,15 +12,17 @@ from . import config
 def add_rolling_pace(
     df: pd.DataFrame,
     windows: tuple = (3, 5),
-    value_col: str = 'lap_time_ms'
+    value_col: str = 'lap_time_ms',
+    min_periods_fraction: float = 0.6
 ) -> pd.DataFrame:
     """
-    Add rolling pace delta features.
+    Add rolling pace delta features with proper min_periods handling.
     
     Args:
         df: DataFrame with lap times
         windows: Tuple of window sizes
         value_col: Column name for lap times
+        min_periods_fraction: Fraction of window required (e.g., 0.6 means 3/5 for window=5)
     
     Returns:
         DataFrame with pace delta columns added
@@ -29,11 +31,15 @@ def add_rolling_pace(
     
     for window in windows:
         col_name = f'pace_delta_roll{window}'
+        min_periods = max(1, int(window * min_periods_fraction))
         
-        # Calculate rolling mean per driver-stint
+        # Calculate rolling mean per driver-stint with proper min_periods
         df[col_name] = df.groupby(['session_key', 'driver', 'stint_id'])[value_col].transform(
-            lambda x: x - x.rolling(window=window, min_periods=1).mean()
+            lambda x: x - x.rolling(window=window, min_periods=min_periods).mean()
         )
+        
+        # Fill remaining NaN values with 0 (early laps in stint)
+        df[col_name] = df[col_name].fillna(0.0)
     
     return df
 
@@ -109,6 +115,98 @@ def add_sector_deltas(df: pd.DataFrame) -> pd.DataFrame:
             df[delta_col] = df.groupby(['session_key', 'driver'])[col].transform(
                 lambda x: x - x[x > 0].min() if (x > 0).any() else 0
             )
+    
+    return df
+
+
+def add_driver_team_baselines(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add driver and team baseline pace features.
+    
+    Args:
+        df: DataFrame with lap times and driver info
+    
+    Returns:
+        DataFrame with baseline columns added
+    """
+    df = df.copy()
+    
+    # Driver median pace over last 3 laps
+    df['driver_median_pace_3'] = df.groupby(['session_key', 'driver'])['lap_time_ms'].transform(
+        lambda x: x.rolling(window=3, min_periods=1).median()
+    )
+    
+    # If we have team info, calculate team baselines
+    # For now, use a placeholder based on driver grouping
+    df['driver_baseline_pace'] = df.groupby(['session_key', 'driver'])['lap_time_ms'].transform('median')
+    
+    return df
+
+
+def add_stint_position_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add stint position features (lap index within stint, race lap index).
+    
+    Args:
+        df: DataFrame with stint and lap info
+    
+    Returns:
+        DataFrame with position features added
+    """
+    df = df.copy()
+    
+    # Stint lap index (0-indexed position within stint)
+    df['stint_lap_idx'] = df.groupby(['session_key', 'driver', 'stint_id']).cumcount()
+    
+    # Race lap index (0-indexed overall lap number)
+    df['race_lap_idx'] = df.groupby(['session_key', 'driver']).cumcount()
+    
+    return df
+
+
+def add_compound_interactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add compound interaction features.
+    
+    Args:
+        df: DataFrame with compound and tyre age
+    
+    Returns:
+        DataFrame with compound interaction features
+    """
+    df = df.copy()
+    
+    # Compound x age interaction
+    if 'compound' in df.columns and 'tyre_age_laps' in df.columns:
+        # Create numerical encoding for compounds
+        compound_map = {'SOFT': 1, 'MEDIUM': 2, 'HARD': 3, 'INTERMEDIATE': 4, 'WET': 5}
+        df['compound_numeric'] = df['compound'].map(compound_map).fillna(0)
+        df['compound_x_age'] = df['compound_numeric'] * df['tyre_age_laps']
+    
+    return df
+
+
+def add_weather_interactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add weather interaction features.
+    
+    Args:
+        df: DataFrame with weather data
+    
+    Returns:
+        DataFrame with weather interaction features
+    """
+    df = df.copy()
+    
+    # Air-track temperature delta
+    if 'air_temp' in df.columns and 'track_temp' in df.columns:
+        df['air_track_temp_delta'] = df['track_temp'] - df['air_temp']
+    
+    # Wind effect (if available)
+    if 'wind_speed' in df.columns:
+        df['wind_effect'] = df['wind_speed'].fillna(0)
+    else:
+        df['wind_effect'] = 0.0
     
     return df
 
@@ -262,7 +360,7 @@ def assemble_feature_table(
     
     df = laps_processed.copy()
     
-    # Add rolling pace features
+    # Add rolling pace features (with proper min_periods)
     df = add_rolling_pace(df, windows=config.ROLLING_WINDOWS)
     print(f"✓ Added rolling pace features")
     
@@ -274,12 +372,52 @@ def assemble_feature_table(
     df = add_sector_deltas(df)
     print(f"✓ Added sector deltas")
     
+    # Add driver and team baselines
+    df = add_driver_team_baselines(df)
+    print(f"✓ Added driver/team baselines")
+    
+    # Add stint position features
+    df = add_stint_position_features(df)
+    print(f"✓ Added stint position features")
+    
+    # Add compound interactions
+    df = add_compound_interactions(df)
+    print(f"✓ Added compound interactions")
+    
+    # Add weather interactions
+    df = add_weather_interactions(df)
+    print(f"✓ Added weather interactions")
+    
     # Join pit loss lookup
     df = join_pitloss_lookup(df, pitloss_csv_path)
     print(f"✓ Joined pit loss lookup")
     
     # Add hazard baselines
     df = baseline_hazards(df, hazard_csv_path)
+    print(f"✓ Added hazard baselines")
+    
+    # Create degradation target
+    df = create_degradation_target(df)
+    print(f"✓ Created degradation target")
+    
+    # Ensure all required columns exist
+    for col in config.REQUIRED_STINT_FEATURE_COLS:
+        if col not in df.columns:
+            print(f"Warning: Required column '{col}' missing, filling with default")
+            if col in ['pace_delta_roll3', 'pace_delta_roll5', 'deg_slope_last5']:
+                df[col] = 0.0
+            elif col == 'track_status':
+                df[col] = '1'
+            elif col == 'pit_loss_s':
+                df[col] = 24.0
+    
+    # Fill remaining NaN values in numeric columns
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    df[numeric_cols] = df[numeric_cols].fillna(0)
+    
+    print(f"✓ Feature table complete: {len(df):,} rows, {len(df.columns)} columns")
+    
+    return df
     print(f"✓ Added hazard baselines")
     
     # Create degradation target
