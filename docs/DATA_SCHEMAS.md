@@ -37,8 +37,21 @@ data/
 │
 └── lookups/                # Reference data (committed to git)
     ├── pitloss_by_circuit.csv
-    └── hazard_priors.csv
+    ├── hazard_priors.csv
+    └── circuit_meta.csv      # NEW: Circuit metadata (v0.3+)
 ```
+
+### New in v0.3
+
+**Enhanced Features**:
+- Pack dynamics (front/rear gaps, pack density, clean air)
+- Race context (grid position, track evolution)
+- Circuit metadata (abrasiveness, pit lane geometry)
+
+**Advanced Models**:
+- Quantile regression for degradation uncertainty
+- Mechanistic pit loss with SC/VSC multipliers
+- Calibrated hazard probabilities
 
 ---
 
@@ -378,6 +391,42 @@ Wide feature table for model training.
 
 | Column | Type | Description |
 |--------|------|-------------|
+| `temp_x_age` | float64 | Track temp × tyre_age |
+| `humid_x_age` | float64 | Humidity × tyre_age |
+
+**Pack dynamics features** (NEW in v0.3):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `front_gap_s` | float64 | Gap to car ahead (seconds) | 1.8 |
+| `rear_gap_s` | float64 | Gap to car behind (seconds) | 2.3 |
+| `pack_density_3s` | int64 | Cars within ±3s | 5 |
+| `pack_density_5s` | int64 | Cars within ±5s | 8 |
+| `clean_air` | int64 | Clean air indicator (0/1) | 1 |
+
+**Race context features** (NEW in v0.3):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `grid_position` | int64 | Starting grid position | 3 |
+| `team_id` | object | Team identifier | "RED_BULL" |
+| `track_evolution_lap_ratio` | float64 | Lap progress ratio (0-1) | 0.42 |
+
+**Circuit metadata features** (NEW in v0.3):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `abrasiveness` | float64 | Circuit tyre wear severity | 0.85 |
+| `pit_lane_length_m` | float64 | Pit lane length | 350.0 |
+| `pit_speed_kmh` | float64 | Pit speed limit | 60.0 |
+| `drs_zones` | int64 | Number of DRS zones | 2 |
+| `high_speed_turn_share` | float64 | High-speed corner fraction | 0.65 |
+| `elevation_gain_m` | float64 | Total elevation change | 18.0 |
+
+**Priors** (from lookups):
+
+| Column | Type | Description |
+|--------|------|-------------|
 | `air_track_temp_delta` | float64 | Air temp - Track temp |
 | `wind_effect` | float64 | Wind speed × humidity proxy |
 
@@ -534,7 +583,43 @@ strategy_decisions (*) ──→ (1) sessions
 
 lookups/pitloss (1) ──→ (*) laps_processed  [via circuit_name]
 lookups/hazard (1) ──→ (*) laps_processed  [via circuit_name]
+lookups/circuit_meta (1) ──→ (*) laps_processed  [via circuit_name]
 ```
+
+---
+
+## Lookup Tables (Reference Data)
+
+### circuit_meta.csv (NEW in v0.3)
+
+Circuit-specific metadata for advanced modeling.
+
+| Column | Type | Description | Example | Required |
+|--------|------|-------------|---------|----------|
+| `circuit_name` | object | Circuit name (must match sessions) | "Silverstone Circuit" | Yes |
+| `abrasiveness` | float64 | Tyre wear severity (0-1 scale) | 0.85 | Yes |
+| `pit_lane_length_m` | float64 | Pit lane length in meters | 350.0 | Yes |
+| `pit_speed_kmh` | float64 | Pit speed limit in km/h | 60.0 | Yes |
+| `drs_zones` | int64 | Number of DRS zones | 2 | Yes |
+| `high_speed_turn_share` | float64 | Fraction of high-speed corners | 0.65 | Yes |
+| `elevation_gain_m` | float64 | Total elevation change in meters | 18.0 | Yes |
+
+**Keys**:
+- Primary: `circuit_name`
+
+**Usage**:
+- Mechanistic pit loss calculation
+- Track-specific degradation adjustments
+- Feature enrichment for models
+
+**Example**:
+```csv
+circuit_name,abrasiveness,pit_lane_length_m,pit_speed_kmh,drs_zones,high_speed_turn_share,elevation_gain_m
+Silverstone Circuit,0.85,350,60,2,0.65,18
+Circuit de Monaco,0.55,245,60,1,0.05,42
+```
+
+---
 
 ### Join Patterns
 
