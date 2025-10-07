@@ -213,5 +213,3 @@ def compute_circuit_mechanistic_pitloss(
         })
     
     return pd.DataFrame(results)
-    else:
-        return pd.DataFrame()
