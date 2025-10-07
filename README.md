@@ -172,6 +172,58 @@ f1-track-strategy/
 ### Lookups (Seed Data)
 - `lookups/pitloss_by_circuit.csv`: Circuit-specific pit loss times
 - `lookups/hazard_priors.csv`: Safety car probabilities per circuit
+- `lookups/circuit_meta.csv`: Circuit metadata (NEW in v0.3)
+
+## 🆕 New Features in v0.3
+
+### Multi-Season Support
+```bash
+# Ingest multiple seasons at once
+python -m f1ts.cli ingest --seasons 2018-2024 --rounds 1-22
+
+# Or specific seasons
+python -m f1ts.cli ingest --seasons 2022,2023,2024 --rounds 1-10
+```
+
+### Advanced Models
+
+**Quantile Regression for Degradation**
+- Provides P50, P80, P90 predictions for uncertainty estimation
+- Monotonic constraints on tyre age
+- Quality gate: MAE ≤ 0.075s, P90 coverage 88-92%
+
+**Mechanistic Pit Loss Model**
+- Physics-based model using pit lane geometry
+- SC/VSC multipliers for accurate adjustments
+- Quality gate: MAE ≤ 0.70s
+
+**Calibrated Hazard Model**
+- Discrete-time hazard with circuit-level effects
+- Isotonic calibration for reliable probabilities
+- Quality gate: Brier ≤ 0.11
+
+**Risk-Aware Optimizer**
+- Monte Carlo simulation with uncertainty sampling
+- CVaR, P(win vs target), P95 regret metrics
+- Pareto frontier for strategy comparison
+
+### Feature Enrichment
+
+**Pack Dynamics**
+- Front/rear gaps, pack density, clean air indicator
+
+**Race Context**
+- Grid position, track evolution ratio
+
+**Circuit Metadata**
+- Abrasiveness, pit lane geometry, elevation, DRS zones
+
+### Hyperparameter Optimization
+- Automated tuning with Optuna
+- Bayesian optimization with early stopping
+- Enable with `HPO_ENABLED = True` in config
+
+See [docs/ADVANCED_FEATURES.md](docs/ADVANCED_FEATURES.md) for complete documentation.
 
 ## 🤖 Models
 
@@ -182,16 +234,25 @@ Predicts tyre degradation (lap time increase) based on:
 - Circuit characteristics
 - Fuel load proxy
 
+**Enhancements in v0.3**:
+- Quantile regression (P50/P80/P90) for uncertainty
+- Monotonic constraints on tyre age
+- Optuna hyperparameter optimization
+
 **Target**: `target_deg_ms` (lap time delta adjusted for fuel and baseline)
-**Quality Gate**: MAE ≤ 0.08s
+**Quality Gate**: MAE ≤ 0.075s (enhanced from 0.08s)
 
 ### 2. Pit Loss Model (`models_pitloss.py`)
 Estimates total time lost during a pit stop:
 - Circuit-specific pit lane characteristics
 - Traffic and timing factors
 
+**Enhancements in v0.3**:
+- Mechanistic baseline using pit lane geometry
+- SC/VSC multipliers (50% and 70% savings)
+
 **Target**: `pit_loss_s`
-**Quality Gate**: MAE ≤ 0.8s
+**Quality Gate**: MAE ≤ 0.70s (enhanced from 0.80s)
 
 ### 3. Hazard Model (`models_hazards.py`)
 Predicts probability of safety car/VSC in next N laps:
@@ -199,8 +260,13 @@ Predicts probability of safety car/VSC in next N laps:
 - Lap number
 - Current conditions
 
+**Enhancements in v0.3**:
+- Discrete-time hazard with logistic regression
+- Circuit hierarchical effects
+- Isotonic calibration for reliability
+
 **Target**: Binary safety car occurrence
-**Quality Gate**: Brier score ≤ 0.12
+**Quality Gate**: Brier score ≤ 0.11 (enhanced from 0.12)
 
 ## 🎮 Streamlit App Pages
 
