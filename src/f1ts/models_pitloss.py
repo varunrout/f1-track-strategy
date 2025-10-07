@@ -136,5 +136,82 @@ def compute_circuit_averages(
         circuit_avg.columns = ['circuit_name', 'pit_loss_s', 'pit_loss_std', 'n_stops']
         
         return circuit_avg
+
+
+def compute_mechanistic_pitloss(
+    pit_lane_length_m: float,
+    pit_speed_kmh: float,
+    service_time_s: float = 2.5,
+    entry_exit_time_s: float = 5.0,
+    regime: str = 'green'
+) -> float:
+    """
+    Compute mechanistic pit loss baseline using pit lane geometry.
+    
+    Args:
+        pit_lane_length_m: Pit lane length in meters
+        pit_speed_kmh: Pit speed limit in km/h
+        service_time_s: Time stationary for tyre change (default 2.5s)
+        entry_exit_time_s: Time for entry/exit maneuvers (default 5.0s)
+        regime: Pit regime - 'green', 'SC' (safety car), or 'VSC' (virtual safety car)
+    
+    Returns:
+        Pit loss time in seconds
+    """
+    # Convert pit speed to m/s
+    pit_speed_ms = pit_speed_kmh / 3.6
+    
+    # Time in pit lane at limited speed
+    pit_lane_time_s = pit_lane_length_m / pit_speed_ms
+    
+    # Total pit loss
+    total_time = pit_lane_time_s + service_time_s + entry_exit_time_s
+    
+    # Apply regime multipliers
+    if regime == 'SC':
+        total_time *= config.PIT_LOSS_SC_MULTIPLIER
+    elif regime == 'VSC':
+        total_time *= config.PIT_LOSS_VSC_MULTIPLIER
+    
+    return total_time
+
+
+def compute_circuit_mechanistic_pitloss(
+    circuit_meta_path: str,
+    regime: str = 'green'
+) -> pd.DataFrame:
+    """
+    Compute mechanistic pit loss for all circuits.
+    
+    Args:
+        circuit_meta_path: Path to circuit metadata CSV
+        regime: Pit regime ('green', 'SC', 'VSC')
+    
+    Returns:
+        DataFrame with mechanistic pit loss estimates
+    """
+    import os
+    
+    if not os.path.exists(circuit_meta_path):
+        print(f"Warning: Circuit metadata not found at {circuit_meta_path}")
+        return pd.DataFrame()
+    
+    circuit_meta = pd.read_csv(circuit_meta_path)
+    
+    results = []
+    for _, row in circuit_meta.iterrows():
+        pit_loss = compute_mechanistic_pitloss(
+            pit_lane_length_m=row['pit_lane_length_m'],
+            pit_speed_kmh=row['pit_speed_kmh'],
+            regime=regime
+        )
+        
+        results.append({
+            'circuit_name': row['circuit_name'],
+            'pit_loss_mechanistic_s': pit_loss,
+            'regime': regime,
+        })
+    
+    return pd.DataFrame(results)
     else:
         return pd.DataFrame()
