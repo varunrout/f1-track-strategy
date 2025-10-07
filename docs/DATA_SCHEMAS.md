@@ -39,14 +39,19 @@ data/
     ├── pitloss_by_circuit.csv
     ├── hazard_priors.csv
     └── circuit_meta.csv      # NEW: Circuit metadata (v0.3+)
+
+└── raw/telemetry/          # Telemetry summaries (NEW in v0.3+)
+    └── {session_key}_telemetry_summary.parquet
 ```
 
-### New in v0.3
+### New in v0.3+
 
 **Enhanced Features**:
 - Pack dynamics (front/rear gaps, pack density, clean air)
 - Race context (grid position, track evolution)
 - Circuit metadata (abrasiveness, pit lane geometry)
+- **Telemetry summaries** (throttle, brake, speed, cornering, DRS)
+- **Track evolution** (grip proxy, sector evolution, lap trends)
 
 **Advanced Models**:
 - Quantile regression for degradation uncertainty
@@ -423,6 +428,40 @@ Wide feature table for model training.
 | `high_speed_turn_share` | float64 | High-speed corner fraction | 0.65 |
 | `elevation_gain_m` | float64 | Total elevation change | 18.0 |
 
+**Circuit metadata features** (NEW in v0.3):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `abrasiveness` | float64 | Circuit tyre wear severity | 0.85 |
+| `pit_lane_length_m` | float64 | Pit lane length | 350.0 |
+| `pit_speed_kmh` | float64 | Pit speed limit | 60.0 |
+| `drs_zones` | int64 | Number of DRS zones | 2 |
+| `high_speed_turn_share` | float64 | High-speed corner fraction | 0.65 |
+| `elevation_gain_m` | float64 | Total elevation change | 18.0 |
+
+**Telemetry features** (NEW in v0.3+):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `avg_throttle` | float64 | Average throttle (0-1) | 0.65 |
+| `avg_brake` | float64 | Brake usage fraction (0-1) | 0.25 |
+| `avg_speed` | float64 | Average speed (km/h) | 185.3 |
+| `max_speed` | float64 | Maximum speed (km/h) | 325.7 |
+| `corner_time_frac` | float64 | Cornering time fraction | 0.18 |
+| `gear_shift_rate` | float64 | Shifts per km | 1.2 |
+| `drs_usage_ratio` | float64 | DRS usage (0-1) | 0.15 |
+
+**Track evolution features** (NEW in v0.3+):
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `session_lap_ratio` | float64 | Normalized lap progress (0-1) | 0.42 |
+| `track_grip_proxy` | float64 | Estimated grip improvement | 0.56 |
+| `sector1_evolution` | float64 | Sector 1 time vs rolling median (ms) | -120.5 |
+| `sector2_evolution` | float64 | Sector 2 time vs rolling median (ms) | -85.3 |
+| `sector3_evolution` | float64 | Sector 3 time vs rolling median (ms) | -92.1 |
+| `lap_time_trend` | float64 | Recent lap time improvement (ms) | -45.2 |
+
 **Priors** (from lookups):
 
 | Column | Type | Description |
@@ -444,7 +483,7 @@ Wide feature table for model training.
 |--------|------|-------------|
 | `target_deg_ms` | float64 | Degradation-adjusted lap time |
 
-**Feature count**: 25-30 columns
+**Feature count**: 40-50 columns (base: 25-30 + telemetry: 7 + track evolution: 6)
 
 **Validation**:
 ```python
@@ -617,6 +656,45 @@ Circuit-specific metadata for advanced modeling.
 circuit_name,abrasiveness,pit_lane_length_m,pit_speed_kmh,drs_zones,high_speed_turn_share,elevation_gain_m
 Silverstone Circuit,0.85,350,60,2,0.65,18
 Circuit de Monaco,0.55,245,60,1,0.05,42
+```
+
+---
+
+### {session_key}_telemetry_summary.parquet (NEW in v0.3+)
+
+Telemetry summaries per driver-lap from FastF1.
+
+| Column | Type | Description | Range | Required |
+|--------|------|-------------|-------|----------|
+| `session_key` | object | Session identifier | - | Yes |
+| `driver` | object | 3-letter driver code | - | Yes |
+| `lap` | int64 | Lap number | 1-100 | Yes |
+| `avg_throttle` | float64 | Average throttle (normalized) | 0-1 | Yes |
+| `avg_brake` | float64 | Fraction of time with brake active | 0-1 | Yes |
+| `avg_speed` | float64 | Average speed | km/h | Yes |
+| `max_speed` | float64 | Maximum speed reached | km/h | Yes |
+| `corner_time_frac` | float64 | Time in cornering state | 0-1 | Yes |
+| `gear_shift_rate` | float64 | Gear changes per kilometer | shifts/km | Yes |
+| `drs_usage_ratio` | float64 | Time with DRS active | 0-1 | Yes |
+
+**Keys**:
+- Composite: `(session_key, driver, lap)`
+
+**Cornering State Definition**:
+- Throttle < 0.2 (20%) AND Brake > 0 (active)
+- Formula: `corner_time_frac = Σ_t 1[(Throttle < 0.2) ∧ (Brake > 0)] * Δt / Σ_t Δt`
+
+**Usage**:
+- Driver-specific driving style analysis
+- Degradation modeling with driving inputs
+- Correlation with tyre wear patterns
+
+**Example**:
+```python
+telemetry = pd.read_parquet('data/raw/telemetry/2023_1_R_telemetry_summary.parquet')
+print(telemetry.head())
+#   session_key driver  lap  avg_throttle  avg_brake  corner_time_frac  ...
+# 0    2023_1_R    VER    1         0.65       0.25              0.18  ...
 ```
 
 ---

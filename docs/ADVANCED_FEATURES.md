@@ -17,7 +17,7 @@ Complete guide to the advanced modeling features in the F1 Tyre Strategy system 
 
 ## Overview
 
-Version 0.3 introduces significant enhancements:
+Version 0.3+ introduces significant enhancements:
 
 | Feature | Purpose | Benefit |
 |---------|---------|---------|
@@ -26,6 +26,8 @@ Version 0.3 introduces significant enhancements:
 | **Hazard Calibration** | Calibrated safety car probabilities | Reliable uncertainty estimates |
 | **Risk-Aware Optimizer** | Monte Carlo simulation | CVaR, P(win), regret metrics |
 | **Pack Dynamics** | Track position & gaps | Better race context |
+| **Telemetry Summaries** | Driver inputs per lap | Driving style analysis |
+| **Track Evolution** | Grip & sector improvements | Time-dependent modeling |
 | **Optuna HPO** | Automated hyperparameter tuning | Optimal model performance |
 
 ---
@@ -372,6 +374,76 @@ df['drs_zones'] = ...
 df['high_speed_turn_share'] = ...  # 0.65 for Silverstone
 df['elevation_gain_m'] = ...       # 105m for Spa
 ```
+
+### Telemetry Summaries (NEW)
+
+**Motivation**: Driver inputs directly affect tyre degradation and race performance.
+
+**Data Source**: FastF1 telemetry API (`lap.get_telemetry()`)
+
+**Features per Lap**:
+
+```python
+# Average throttle application (0-1)
+df['avg_throttle'] = ...  # e.g., 0.65
+
+# Brake usage (fraction of time with brake active)
+df['avg_brake'] = ...  # e.g., 0.25
+
+# Speed metrics
+df['avg_speed'] = ...  # e.g., 185.3 km/h
+df['max_speed'] = ...  # e.g., 325.7 km/h
+
+# Cornering state: throttle < 20% AND brake on
+df['corner_time_frac'] = ...  # e.g., 0.18 (18% of lap)
+
+# Gear shifts per kilometer
+df['gear_shift_rate'] = ...  # e.g., 1.2 shifts/km
+
+# DRS usage
+df['drs_usage_ratio'] = ...  # e.g., 0.15 (15% of lap)
+```
+
+**Ingestion**:
+
+```bash
+# Include telemetry when ingesting data
+python -m f1ts.cli ingest --seasons 2023 --rounds 1 --include-telemetry
+```
+
+**Storage**: `data/raw/telemetry/{session_key}_telemetry_summary.parquet`
+
+**Usage in Models**:
+- Correlate aggressive driving (high brake, corner time) with degradation
+- Identify driver-specific tyre management styles
+- Predict degradation based on driving inputs
+
+### Track Evolution (NEW)
+
+**Motivation**: Track conditions improve as rubber is laid down and grip increases.
+
+**Features**:
+
+```python
+# Normalized lap progress (0 at start, 1 at finish)
+df['session_lap_ratio'] = lap_number / total_laps
+
+# Grip improvement proxy (logarithmic curve)
+df['track_grip_proxy'] = np.log1p(session_lap_ratio * 3) / np.log1p(3)
+
+# Sector time evolution (current - rolling median)
+df['sector1_evolution'] = ...  # Negative = improving
+df['sector2_evolution'] = ...
+df['sector3_evolution'] = ...
+
+# Recent lap time trend (5-lap vs 10-lap average)
+df['lap_time_trend'] = ...  # Negative = getting faster
+```
+
+**Usage in Models**:
+- Account for changing track conditions over the race
+- Model grip-dependent degradation
+- Predict optimal pit timing based on track evolution
 
 ---
 
