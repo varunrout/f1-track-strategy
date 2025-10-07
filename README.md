@@ -5,12 +5,12 @@ A complete ML-driven system for predicting optimal F1 tyre strategies using hist
 ## 🎯 Project Overview
 
 This system:
-- **Ingests** F1 telemetry data from FastF1
-- **Processes** lap times, stint data, pit stops, and weather
-- **Models** tyre degradation, pit loss, and safety car probabilities
-- **Optimizes** race strategies by simulating alternative pit stop plans
-- **Backtests** decisions against historical races
-- **Visualizes** recommendations in an interactive Streamlit app
+- Ingests F1 telemetry data from FastF1
+- Processes lap times, stint data, pit stops, and weather
+- Models tyre degradation, pit loss, and safety car probabilities
+- Optimizes race strategies by simulating alternative pit stop plans
+- Backtests decisions against historical races
+- Visualizes recommendations in an interactive Streamlit app
 
 All data is stored as flat files (Parquet/CSV), making it easy to inspect, version, and iterate on.
 
@@ -39,11 +39,13 @@ export PYTHONHASHSEED=0
 #### Option A: Using CLI (Recommended)
 
 ```bash
-# Run complete pipeline for 2023 season, rounds 1-10
-python -m f1ts.cli pipeline --season 2023 --rounds 1-10
+# Run complete pipeline with multi-season support and telemetry summaries
+python -m f1ts.cli pipeline --seasons 2022,2023 --rounds 1-10 --session-code R
 
-# Or run individual steps:
-python -m f1ts.cli ingest --season 2023 --rounds 1-10
+# Or run individual steps
+# Ingest (supports season ranges and telemetry)
+python -m f1ts.cli ingest --seasons 2018-2024 --rounds 1-22 --include-telemetry
+# Then run remaining steps
 python -m f1ts.cli clean
 python -m f1ts.cli foundation
 python -m f1ts.cli features
@@ -63,14 +65,14 @@ jupyter lab
 
 # Execute notebooks in sequence:
 # 00_setup_env.ipynb         - Verify installation
-# 01_ingest_fastf1.ipynb     - Download race data (now fetches rounds 1-10)
+# 01_ingest_fastf1.ipynb     - Download race data (optionally saves telemetry summaries)
 # 02_clean_normalize.ipynb   - Clean and standardize
 # 03_build_foundation_sets.ipynb - Build base tables
-# 04_features_stint_lap.ipynb    - Engineer features
-# 05_model_degradation.ipynb     - Train degradation model
-# 06_model_pitloss.ipynb         - Train pit loss model
-# 07_model_hazards.ipynb         - Train hazard model
-# 08_strategy_optimizer.ipynb    - Build optimizer
+# 04_features_stint_lap.ipynb    - Engineer features (pack dynamics, telemetry, track evolution)
+# 05_model_degradation.ipynb     - Train degradation model (supports quantile + coverage checks)
+# 06_model_pitloss.ipynb         - Train/compute pit loss model
+# 07_model_hazards.ipynb         - Train + calibrate hazard model
+# 08_strategy_optimizer.ipynb    - Build optimizer (risk-aware Monte Carlo optional)
 # 09_backtest_replay.ipynb       - Backtest strategies
 # 10_export_for_app.ipynb        - Export for Streamlit
 ```
@@ -99,10 +101,11 @@ The app will open in your browser at `http://localhost:8501`
 f1-track-strategy/
 ├── data/
 │   ├── raw/           # Unmodified FastF1 data
+│   │   └── telemetry/ # Per-session telemetry summaries (if ingested)
 │   ├── interim/       # Type-fixed and keyed data
 │   ├── processed/     # Joined base tables
 │   ├── features/      # Feature tables for modeling
-│   └── lookups/       # Small CSV files (pit loss, hazard priors)
+│   └── lookups/       # Small CSV files (pit loss, hazard priors, circuit metadata)
 │
 ├── notebooks/         # 11 sequential notebooks (00-10)
 │   ├── 00_setup_env.ipynb
@@ -132,11 +135,12 @@ f1-track-strategy/
 │   └── utils.py               # Utilities
 │
 ├── app/               # Streamlit pages
-│   ├── Home.py                   # Main page
-│   ├── 1_Race_Explorer.py        # Race analysis
-│   ├── 2_Strategy_Sandbox.py     # Interactive optimizer
-│   ├── 3_Model_QC.py             # Model quality checks
-│   └── 4_Data_Health.py          # Data validation
+│   ├── Home.py
+│   └── pages/
+│       ├── 1_Race_Explorer.py
+│       ├── 2_Strategy_Sandbox.py
+│       ├── 3_Model_QC.py
+│       └── 4_Data_Health.py
 │
 ├── models/            # Saved model files (.pkl)
 ├── metrics/           # Evaluation metrics (JSON/CSV)
@@ -148,16 +152,17 @@ f1-track-strategy/
 ## 📊 Data Schemas
 
 ### Key Conventions
-- **Time units**: Lap times in milliseconds (int), temperatures in °C
-- **Session key**: `{season}_{round}_R` (e.g., `2023_1_R`)
-- **Driver**: 3-letter code (e.g., `VER`, `HAM`)
-- **Compounds**: `SOFT`, `MEDIUM`, `HARD`
+- Time units: Lap times in milliseconds (int), temperatures in °C
+- Session key: `{season}_{round}_R` (e.g., `2023_1_R`)
+- Driver: 3-letter code (e.g., `VER`, `HAM`)
+- Compounds: `SOFT`, `MEDIUM`, `HARD`
 
 ### Raw Data (from FastF1)
 - `sessions.csv`: Race metadata
 - `{session_key}_laps.parquet`: Lap-by-lap data
 - `{session_key}_pitstops.csv`: Pit stop information
 - `{session_key}_weather.csv`: Weather conditions
+- `telemetry/{session_key}_telemetry_summary.parquet`: Per-lap telemetry summaries (if `--include-telemetry`)
 
 ### Processed Data
 - `laps_processed.parquet`: Complete lap data with weather and events
@@ -165,13 +170,13 @@ f1-track-strategy/
 - `events.parquet`: Safety cars, VSC, yellow flags
 
 ### Features
-- `stint_features.parquet`: Wide feature table for modeling
+- `stint_features.parquet`: Wide feature table for modeling (includes pack dynamics, telemetry, track evolution)
 - `degradation_train.parquet`: Training data for degradation model
 - `strategy_decisions.parquet`: Optimizer outputs
 
 ### Lookups (Seed Data)
 - `lookups/pitloss_by_circuit.csv`: Circuit-specific pit loss times
-- `lookups/hazard_priors.csv`: Safety car probabilities per circuit
+- `lookups/hazard_priors.csv`: Safety car rates per 10 laps (columns: `sc_per_10laps`, `vsc_per_10laps`)
 - `lookups/circuit_meta.csv`: Circuit metadata (NEW in v0.3)
 
 ## 🆕 New Features in v0.3
@@ -218,6 +223,9 @@ python -m f1ts.cli ingest --seasons 2022,2023,2024 --rounds 1-10
 **Circuit Metadata**
 - Abrasiveness, pit lane geometry, elevation, DRS zones
 
+**Telemetry Summaries**
+- Throttle, brake, speed, cornering, gearshift, DRS usage
+
 ### Hyperparameter Optimization
 - Automated tuning with Optuna
 - Bayesian optimization with early stopping
@@ -234,25 +242,25 @@ Predicts tyre degradation (lap time increase) based on:
 - Circuit characteristics
 - Fuel load proxy
 
-**Enhancements in v0.3**:
+Enhancements in v0.3:
 - Quantile regression (P50/P80/P90) for uncertainty
 - Monotonic constraints on tyre age
 - Optuna hyperparameter optimization
 
-**Target**: `target_deg_ms` (lap time delta adjusted for fuel and baseline)
-**Quality Gate**: MAE ≤ 0.075s (enhanced from 0.08s)
+Target: `target_deg_ms` (lap time delta adjusted for fuel and baseline)
+Quality Gate: MAE ≤ 0.075s (enhanced from 0.08s), P90 coverage 88-92%
 
 ### 2. Pit Loss Model (`models_pitloss.py`)
 Estimates total time lost during a pit stop:
 - Circuit-specific pit lane characteristics
 - Traffic and timing factors
 
-**Enhancements in v0.3**:
+Enhancements in v0.3:
 - Mechanistic baseline using pit lane geometry
 - SC/VSC multipliers (50% and 70% savings)
 
-**Target**: `pit_loss_s`
-**Quality Gate**: MAE ≤ 0.70s (enhanced from 0.80s)
+Target: `pit_loss_s`
+Quality Gate: MAE ≤ 0.70s (enhanced from 0.80s)
 
 ### 3. Hazard Model (`models_hazards.py`)
 Predicts probability of safety car/VSC in next N laps:
@@ -260,40 +268,21 @@ Predicts probability of safety car/VSC in next N laps:
 - Lap number
 - Current conditions
 
-**Enhancements in v0.3**:
+Enhancements in v0.3:
 - Discrete-time hazard with logistic regression
 - Circuit hierarchical effects
 - Isotonic calibration for reliability
 
-**Target**: Binary safety car occurrence
-**Quality Gate**: Brier score ≤ 0.11 (enhanced from 0.12)
+Target: Binary safety car occurrence
+Quality Gate: Brier score ≤ 0.11 (enhanced from 0.12)
 
 ## 🎮 Streamlit App Pages
 
-### Home
-- Race selector (season, round)
-- KPI dashboard (laps, pit stops, weather)
-- Navigation to analysis pages
-
-### 1. Race Explorer
-- Lap time visualization with stint markers
-- Driver-by-driver stint analysis
-- Undercut opportunity calculator
-
-### 2. Strategy Sandbox
-- Interactive strategy optimizer
-- Adjust compounds, pit windows, risk parameters
-- Compare alternative strategies
-
-### 3. Model QC
-- Model performance metrics
-- Residual analysis
-- Calibration plots
-
-### 4. Data Health
-- Schema compliance checks
-- Missingness reports
-- Outlier detection
+- Home: Race selector and KPIs
+- Race Explorer: Lap time visualization, stint analysis, undercut calculator
+- Strategy Sandbox: Interactive optimizer with risk-aware options
+- Model QC: Model performance, calibration, and quality gates
+- Data Health: Schema checks, missingness, outliers
 
 ## 🔧 How to Retrain Models
 
@@ -307,8 +296,8 @@ python -m f1ts.cli model-deg
 python -m f1ts.cli pitloss
 python -m f1ts.cli hazards
 
-# Or use pipeline command
-python -m f1ts.cli pipeline --season 2023 --rounds 1-10
+# Or use pipeline command (multi-season supported)
+python -m f1ts.cli pipeline --seasons 2022,2023 --rounds 1-10
 ```
 
 ### Using Python API
@@ -320,14 +309,17 @@ from src.f1ts import features, models_degradation, io_flat
 df = io_flat.read_parquet('data/features/stint_features.parquet')
 
 # Prepare training data
-X = df[features.FEATURE_COLS]
+X = df[[
+    'tyre_age_laps','compound','air_temp','track_temp','circuit_name','lap_number'
+]]
 y = df['target_deg_ms']
 
-# Train model with cross-validation (new in v0.2)
+# Train model with cross-validation
 model, metrics = models_degradation.train_with_cv(
     X, y, 
     groups=df['session_key'],
-    n_splits=3
+    n_splits=3,
+    cat_cols=['compound', 'circuit_name']
 )
 
 # Or use simple train
@@ -337,97 +329,52 @@ model = models_degradation.train(X, y, cat_cols=['compound', 'circuit_name'])
 io_flat.save_model(model, 'models/degradation_v1.pkl')
 ```
 
-## 📊 New Features in v0.2
+## 📈 New Features in v0.2
 
-### Enhanced Feature Engineering
-- **Better rolling windows**: Added `min_periods` for robust early-stint handling
-- **Expanded features**: Driver baselines, stint position, compound interactions, weather interactions
-- **NA handling**: Explicit policy with configurable imputation
-
-### Improved Models
-- **GroupKFold CV**: Degradation model now uses grouped cross-validation by session
-- **Hyperparameter tuning**: Basic grid search over key LightGBM parameters
-- **Per-group metrics**: Evaluate model performance by compound and circuit
-
-### CLI Interface
-- **Complete pipeline**: `python -m f1ts.cli pipeline --season 2023 --rounds 1-10`
-- **Individual commands**: Run any pipeline step independently
-- **Flexible ingestion**: Specify rounds as ranges (1-10) or lists (1,2,3,8)
-
-### Testing & CI
-- **Unit tests**: Tests for features, validation, and data cleaning
-- **CI workflow**: Automated linting, type checking, and testing on push
+See UPDATES_v0.2.md for details on earlier improvements (expanded data, enhanced features, CLI, tests).
 
 ## 🧪 Validation
 
 Each notebook includes explicit validation steps:
-- **Schema checks**: Required columns present with correct dtypes
-- **Uniqueness**: Keys like (session_key, driver, lap) are unique
-- **Metric gates**: Model performance meets minimum thresholds
-- **NA policy**: Required columns have no missing values
+- Schema checks: Required columns present with correct dtypes
+- Uniqueness: Keys like (session_key, driver, lap) are unique
+- Metric gates: Model performance meets minimum thresholds
+- NA policy: Required columns have no missing values
 
 ## ⚠️ Known Limitations
 
-1. **Cold start**: Requires ≥3 historical races for meaningful predictions
-2. **Weather**: Simple interpolation; high-frequency changes not captured
-3. **Traffic**: Gap calculations are approximate
-4. **Strategy**: Assumes equal car performance; doesn't model battles
-5. **Data availability**: Depends on FastF1 API uptime
+1. Cold start: Requires ≥3 historical races for meaningful predictions
+2. Weather: Simple interpolation; high-frequency changes not captured
+3. Traffic: Gap calculations are approximate
+4. Strategy: Assumes equal car performance; doesn't model battles
+5. Data availability: Depends on FastF1 API uptime
 
 ## 🔮 Future Enhancements
 
-- [ ] Real-time data integration during live races
-- [ ] Multi-agent optimization (team strategies)
-- [ ] Deeper traffic modeling (overtaking difficulty)
-- [ ] Integration with quali results for grid position impact
-- [ ] Probabilistic strategy trees (Monte Carlo)
-- [ ] API endpoint for strategy queries
+- Real-time data integration during live races
+- Multi-agent optimization (team strategies)
+- Deeper traffic modeling (overtaking difficulty)
+- Integration with quali results for grid position impact
+- Probabilistic strategy trees (Monte Carlo)
+- API endpoint for strategy queries
 
 ## 📚 Documentation
 
-### Quick Links
+- Getting Started: QUICKSTART.md
+- Implementation Details: IMPLEMENTATION.md
+- Complete Documentation: docs/
 
-- **Getting Started**: [QUICKSTART.md](QUICKSTART.md)
-- **Implementation Details**: [IMPLEMENTATION.md](IMPLEMENTATION.md)
-- **Complete Documentation**: [docs/](docs/)
+Comprehensive guides in docs/ include:
+- Module Documentation
+- Notebook Guide
+- Data Schemas
+- Model Guide
+- Testing Guide
+- App User Guide
+- Architecture
+- Troubleshooting
 
-### Comprehensive Guides
-
-Located in the [docs/](docs/) directory:
-
-| Guide | Description |
-|-------|-------------|
-| [Module Documentation](docs/MODULE_DOCUMENTATION.md) | Complete reference for all Python modules (13 modules) |
-| [Notebook Guide](docs/NOTEBOOK_GUIDE.md) | Comprehensive walkthrough of notebooks 00-10 |
-| [Data Schemas](docs/DATA_SCHEMAS.md) | Detailed data contracts, formats, and validation rules |
-| [Model Guide](docs/MODEL_GUIDE.md) | In-depth model architecture, training, and evaluation |
-| [Testing Guide](docs/TESTING_GUIDE.md) | Test documentation, validation framework, quality gates |
-| [App User Guide](docs/APP_USER_GUIDE.md) | Streamlit application user manual (5 pages) |
-| [Architecture](docs/ARCHITECTURE.md) | System architecture and design decisions |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-
-**Total**: 8 comprehensive documentation files (~4,850 lines)
-
-### Documentation by Use Case
-
-**New Users**:
-1. Read main [README.md](README.md) (this file)
-2. Follow [QUICKSTART.md](QUICKSTART.md)
-3. Explore [App User Guide](docs/APP_USER_GUIDE.md)
-
-**Developers**:
-1. Study [Architecture](docs/ARCHITECTURE.md)
-2. Reference [Module Documentation](docs/MODULE_DOCUMENTATION.md)
-3. Follow [Testing Guide](docs/TESTING_GUIDE.md)
-
-**Data Scientists**:
-1. Work through [Notebook Guide](docs/NOTEBOOK_GUIDE.md)
-2. Study [Model Guide](docs/MODEL_GUIDE.md)
-3. Reference [Data Schemas](docs/DATA_SCHEMAS.md)
-
-**Need Help?**: Check [Troubleshooting](docs/TROUBLESHOOTING.md)
-
-## 📝 License
+## 🧾 License
 
 MIT License - See LICENSE file for details
 
@@ -439,15 +386,13 @@ Contributions welcome! Please:
 3. Add tests for new functionality
 4. Submit a pull request
 
-See [docs/](docs/) for detailed documentation on all components.
-
 ## 📧 Contact
 
 For questions or issues, please open a GitHub issue.
 
 ---
 
-**Built with**: FastF1, pandas, LightGBM, Streamlit  
-**Data source**: Formula 1 via FastF1 API  
-**Version**: 0.2.0
-**Documentation**: 8 comprehensive guides in [docs/](docs/)
+Built with: FastF1, pandas, LightGBM, Streamlit  
+Data source: Formula 1 via FastF1 API  
+Version: 0.3.0  
+Documentation: Comprehensive guides in docs/

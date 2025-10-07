@@ -43,6 +43,7 @@ data/processed/*.parquet
 data/features/*.parquet
 data/features/app_export/
 data/raw/.fastf1_cache/
+data/raw/telemetry/
 
 # Keep structure but ignore large files
 !data/raw/.gitkeep

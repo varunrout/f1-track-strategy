@@ -35,12 +35,12 @@ data/
 │   ├── degradation_train.parquet
 │   └── strategy_decisions.parquet
 │
-└── lookups/                # Reference data (committed to git)
+    └── lookups/                # Reference data (committed to git)
     ├── pitloss_by_circuit.csv
     ├── hazard_priors.csv
     └── circuit_meta.csv      # NEW: Circuit metadata (v0.3+)
 
-└── raw/telemetry/          # Telemetry summaries (NEW in v0.3+)
+    └── raw/telemetry/          # Telemetry summaries (NEW in v0.3+)
     └── {session_key}_telemetry_summary.parquet
 ```
 
@@ -574,8 +574,8 @@ Safety car probability priors by circuit.
 | Column | Type | Description | Example | Required |
 |--------|------|-------------|---------|----------|
 | `circuit_name` | object | Circuit name | "Monaco" | Yes |
-| `sc_rate_pct` | float64 | SC rate (%) | 40.0 | Yes |
-| `vsc_rate_pct` | float64 | VSC rate (%) | 15.0 | Yes |
+| `sc_per_10laps` | float64 | SC rate per 10 laps | 0.40 | Yes |
+| `vsc_per_10laps` | float64 | VSC rate per 10 laps | 0.15 | Yes |
 | `total_races` | int64 | Historical races | 5 | No |
 
 **Keys**:
@@ -585,14 +585,12 @@ Safety car probability priors by circuit.
 
 **Example entries**:
 ```csv
-circuit_name,sc_rate_pct,vsc_rate_pct
-Monaco,40.0,15.0
-Singapore,35.0,18.0
-Baku,35.0,20.0
-Jeddah,25.0,10.0
-Bahrain,10.0,5.0
-Silverstone,12.0,6.0
-Spa,12.0,8.0
+circuit_name,sc_per_10laps,vsc_per_10laps
+Circuit de Monaco,0.48,0.20
+Marina Bay Street Circuit,0.52,0.22
+Baku City Circuit,0.55,0.18
+Jeddah Corniche Circuit,0.35,0.12
+Bahrain International Circuit,0.15,0.08
 ```
 
 **Interpretation**:

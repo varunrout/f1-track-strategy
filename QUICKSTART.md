@@ -43,178 +43,113 @@ jupyter lab
 
 ## 📊 Running the Data Pipeline
 
-Execute notebooks **in sequence** (00 through 10):
+You can use notebooks or the CLI. Run notebooks in order (00 → 10) or use the CLI commands below.
 
-### Data Ingestion & Preparation (01-04)
+### CLI Pipeline (Recommended)
 
-1. **01_ingest_fastf1.ipynb** - Download F1 race data from FastF1 API
-   - Downloads 3 sample races (configurable)
-   - Saves to `data/raw/`
-   - Takes 5-10 minutes depending on network speed
+```bash
+# Ingest (multi-season and telemetry supported)
+python -m f1ts.cli ingest --seasons 2018-2024 --rounds 1-22 --include-telemetry
 
-2. **02_clean_normalize.ipynb** - Clean and standardize data
-   - Standardizes tyre compound names
-   - Derives racing stint information
-   - Removes outliers
-   - Saves to `data/interim/`
+# Clean → Foundation → Features → Models → Optimizer → Export
+python -m f1ts.cli clean
+python -m f1ts.cli foundation
+python -m f1ts.cli features
+python -m f1ts.cli model-deg
+python -m f1ts.cli pitloss
+python -m f1ts.cli hazards
+python -m f1ts.cli optimize
+python -m f1ts.cli backtest
+python -m f1ts.cli export
 
-3. **03_build_foundation_sets.ipynb** - Build base tables
-   - Joins laps with weather data
-   - Creates event markers (SC, VSC)
-   - Saves to `data/processed/`
+# Or one-shot pipeline
+python -m f1ts.cli pipeline --seasons 2022,2023 --rounds 1-10
+```
 
-4. **04_features_stint_lap.ipynb** - Feature engineering
-   - Creates rolling pace features
-   - Calculates degradation slopes
-   - Joins lookup tables
-   - Saves to `data/features/`
+### Notebook Flow
 
-### Model Training (05-07)
-
-5. **05_model_degradation.ipynb** - Train degradation model
-   - LightGBM regression model
-   - Predicts tyre wear
-   - Quality gate: MAE ≤ 0.08s
-
-6. **06_model_pitloss.ipynb** - Train pit loss model
-   - Circuit-average baseline
-   - Estimates pit stop time
-
-7. **07_model_hazards.ipynb** - Train hazard model
-   - Safety car probability model
-   - Circuit-based priors
-
-### Strategy & Export (08-10)
-
-8. **08_strategy_optimizer.ipynb** - Build strategy optimizer
-   - Enumerates pit stop strategies
-   - Simulates expected finish times
-   - Ranks by performance
-
-9. **09_backtest_replay.ipynb** - Backtest strategies
-   - Evaluates recommendations vs actual outcomes
-   - Computes regret metrics
-
-10. **10_export_for_app.ipynb** - Export for Streamlit
-    - Creates slim datasets for the app
-    - Exports per-race files
+1. 01_ingest_fastf1.ipynb — Download F1 race data (optionally saves telemetry summaries)
+2. 02_clean_normalize.ipynb — Clean and standardize
+3. 03_build_foundation_sets.ipynb — Join weather, build events/stints
+4. 04_features_stint_lap.ipynb — Engineer features (pack dynamics, telemetry, track evolution)
+5. 05_model_degradation.ipynb — Train degradation model (option: quantile + coverage checks)
+6. 06_model_pitloss.ipynb — Pit loss modeling/analysis
+7. 07_model_hazards.ipynb — Hazard model training + calibration
+8. 08_strategy_optimizer.ipynb — Optimizer (risk-aware Monte Carlo optional)
+9. 09_backtest_replay.ipynb — Backtests
+10. 10_export_for_app.ipynb — Export for the app
 
 ## 🖥️ Running the Streamlit App
 
-After completing notebooks 01-10:
+After completing the pipeline:
 
 ```bash
 streamlit run app/Home.py
 ```
 
-The app will open in your browser at `http://localhost:8501`
+Open `http://localhost:8501` in your browser.
 
-### App Features
+### App Pages
+- Home — Race selector and overview
+- Race Explorer — Lap times, stints, undercut calculator
+- Strategy Sandbox — Strategy optimizer (risk-aware options)
+- Model QC — Metrics, calibration, quality gates
+- Data Health — File availability, schema, missingness
 
-- **Home** - Race selector and overview statistics
-- **Race Explorer** - Lap time charts, stint analysis, undercut calculator
-- **Strategy Sandbox** - Interactive pit stop strategy optimizer
-- **Model QC** - Model performance metrics and quality gates
-- **Data Health** - Data quality checks and schema validation
-
-## 🔧 Configuration
+## ⚙️ Configuration
 
 Edit `src/f1ts/config.py` to customize:
 
-- **TARGET_RACES** - Which races to download (in notebook 01)
-- **ROLLING_WINDOWS** - Feature engineering parameters
-- **Quality Gates** - Model performance thresholds
-- **Random Seeds** - For reproducibility
+- Ingestion: `SESSION_CODES`, `ERAS`
+- Features: `ROLLING_WINDOWS`, `DEG_SLOPE_WINDOW`
+- Telemetry & track evolution feature lists
+- Quality Gates: `DEG_MAE_THRESHOLD`, `PITLOSS_MAE_THRESHOLD`, `HAZARD_BRIER_THRESHOLD`
+- Quantile coverage targets: `DEG_QUANTILE_COVERAGE_P90_MIN/MAX`
+- Risk-aware optimization: `MONTE_CARLO_N_SAMPLES`, `RISK_CVAR_ALPHA`
+- HPO: `HPO_ENABLED`, trials and timeout
 
 ## 📁 Key Files & Directories
 
 ```
 data/
-├── raw/          # Raw data from FastF1 (large files excluded from git)
-├── interim/      # Cleaned data with stints
-├── processed/    # Joined base tables
-├── features/     # Feature tables for modeling
-└── lookups/      # Small reference tables (committed to git)
+├── raw/           # Raw FastF1 data (+ telemetry summaries if enabled)
+├── interim/       # Cleaned data with stints
+├── processed/     # Joined base tables
+├── features/      # Feature tables for modeling
+└── lookups/       # Reference tables (pit loss, hazard, circuit metadata)
 
-models/           # Saved .pkl files (excluded from git)
-metrics/          # Performance metrics JSON files
-notebooks/        # 11 sequential notebooks
-src/f1ts/         # Core Python modules
-app/              # Streamlit application
+models/            # Saved models (.pkl)
+metrics/           # Performance metrics JSON files
+notebooks/         # 11 sequential notebooks
+src/f1ts/          # Core Python modules
+app/               # Streamlit application
 ```
 
-## 🐛 Troubleshooting
+## 🐞 Troubleshooting
 
-### Import Errors
+- Import errors: Activate venv, reinstall deps
+- FastF1 API issues: Retry later; reduce races
+- Notebook errors: Run in order, verify earlier outputs exist
+- Memory: Reduce races; downcast dtypes; close notebooks
 
-If you see `ModuleNotFoundError`:
-```bash
-# Ensure virtual environment is activated
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+## 🛠️ Development Tips
 
-# Reinstall dependencies
-pip install -r requirements.txt
-```
+- Retraining: Re-run 05–07 after feature changes
+- Feature changes: Edit `src/f1ts/features.py` and re-run from 04
+- Custom strategies: See `src/f1ts/optimizer.py` or use the app sandbox
 
-### FastF1 API Issues
+## ✅ Quality Gates (targets)
 
-If FastF1 download fails:
-- Check internet connection
-- API may be temporarily down - retry later
-- Try reducing number of races in notebook 01
-
-### Notebook Execution Errors
-
-- Always run notebooks in sequence (00 → 10)
-- Check previous notebooks completed successfully
-- Verify all required files exist using notebook 04 or the Data Health page
-
-### Memory Issues
-
-For large datasets:
-- Process fewer races initially
-- Increase available system memory
-- Use `del` to free memory between steps
-
-## 📝 Development Tips
-
-### Adding New Circuits
-
-Update `data/lookups/pitloss_by_circuit.csv` and `hazard_priors.csv` with new circuit data.
-
-### Retraining Models
-
-Simply re-run notebooks 05-07 after updating feature data.
-
-### Modifying Features
-
-Edit `src/f1ts/features.py` and re-run notebook 04 onwards.
-
-### Custom Strategies
-
-Modify parameters in `src/f1ts/optimizer.py` or use the Strategy Sandbox page.
-
-## 🎯 Next Steps
-
-1. Run all notebooks with sample data
-2. Explore the Streamlit app
-3. Add more races for better model performance
-4. Customize features and models for your use case
-5. Share insights and improvements!
-
-## 📚 Additional Resources
-
-- **FastF1 Documentation**: https://docs.fastf1.dev/
-- **LightGBM Guide**: https://lightgbm.readthedocs.io/
-- **Streamlit Docs**: https://docs.streamlit.io/
+- Degradation MAE ≤ 0.075s; P90 coverage 88–92%
+- Pit Loss MAE ≤ 0.70s
+- Hazard Brier ≤ 0.11; calibration error < 0.03
 
 ## ❓ Getting Help
 
-- Check the README.md for detailed documentation
-- Review notebook outputs for error messages
-- Use the Data Health page to diagnose issues
-- Open an issue on GitHub for bugs or questions
+- See README.md and docs/ for comprehensive guides
+- Use Data Health page to diagnose missing/invalid files
+- Open a GitHub issue for bugs or questions
 
 ---
 
-**Happy Racing! 🏎️💨**
+Happy Racing! 🏎️💨
