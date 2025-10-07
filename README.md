@@ -317,6 +317,50 @@ Each notebook includes explicit validation steps:
 - [ ] Probabilistic strategy trees (Monte Carlo)
 - [ ] API endpoint for strategy queries
 
+## 📚 Documentation
+
+### Quick Links
+
+- **Getting Started**: [QUICKSTART.md](QUICKSTART.md)
+- **Implementation Details**: [IMPLEMENTATION.md](IMPLEMENTATION.md)
+- **Complete Documentation**: [docs/](docs/)
+
+### Comprehensive Guides
+
+Located in the [docs/](docs/) directory:
+
+| Guide | Description |
+|-------|-------------|
+| [Module Documentation](docs/MODULE_DOCUMENTATION.md) | Complete reference for all Python modules (13 modules) |
+| [Notebook Guide](docs/NOTEBOOK_GUIDE.md) | Comprehensive walkthrough of notebooks 00-10 |
+| [Data Schemas](docs/DATA_SCHEMAS.md) | Detailed data contracts, formats, and validation rules |
+| [Model Guide](docs/MODEL_GUIDE.md) | In-depth model architecture, training, and evaluation |
+| [Testing Guide](docs/TESTING_GUIDE.md) | Test documentation, validation framework, quality gates |
+| [App User Guide](docs/APP_USER_GUIDE.md) | Streamlit application user manual (5 pages) |
+| [Architecture](docs/ARCHITECTURE.md) | System architecture and design decisions |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
+
+**Total**: 8 comprehensive documentation files (~4,850 lines)
+
+### Documentation by Use Case
+
+**New Users**:
+1. Read main [README.md](README.md) (this file)
+2. Follow [QUICKSTART.md](QUICKSTART.md)
+3. Explore [App User Guide](docs/APP_USER_GUIDE.md)
+
+**Developers**:
+1. Study [Architecture](docs/ARCHITECTURE.md)
+2. Reference [Module Documentation](docs/MODULE_DOCUMENTATION.md)
+3. Follow [Testing Guide](docs/TESTING_GUIDE.md)
+
+**Data Scientists**:
+1. Work through [Notebook Guide](docs/NOTEBOOK_GUIDE.md)
+2. Study [Model Guide](docs/MODEL_GUIDE.md)
+3. Reference [Data Schemas](docs/DATA_SCHEMAS.md)
+
+**Need Help?**: Check [Troubleshooting](docs/TROUBLESHOOTING.md)
+
 ## 📝 License
 
 MIT License - See LICENSE file for details
@@ -329,6 +373,8 @@ Contributions welcome! Please:
 3. Add tests for new functionality
 4. Submit a pull request
 
+See [docs/](docs/) for detailed documentation on all components.
+
 ## 📧 Contact
 
 For questions or issues, please open a GitHub issue.
@@ -337,4 +383,5 @@ For questions or issues, please open a GitHub issue.
 
 **Built with**: FastF1, pandas, LightGBM, Streamlit  
 **Data source**: Formula 1 via FastF1 API  
-**Version**: 0.1.0
+**Version**: 0.2.0
+**Documentation**: 8 comprehensive guides in [docs/](docs/)
