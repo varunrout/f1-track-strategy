@@ -65,10 +65,15 @@ def parse_seasons(seasons_str: str) -> List[int]:
 def cmd_ingest(args):
     """Ingest race data from FastF1."""
     # Parse seasons and rounds
-    seasons = parse_seasons(args.seasons) if hasattr(args, 'seasons') else [args.season]
+    seasons = parse_seasons(args.seasons) if hasattr(args, 'seasons') and args.seasons else [args.season]
     rounds = parse_rounds(args.rounds)
     
+    # Check if telemetry flag is set
+    include_telemetry = getattr(args, 'include_telemetry', False)
+    
     print(f"Ingesting races for seasons {seasons}, rounds {rounds}")
+    if include_telemetry:
+        print("  Including telemetry summaries")
     
     # Build race list
     races = [(season, round_num) for season in seasons for round_num in rounds]
@@ -76,7 +81,11 @@ def cmd_ingest(args):
     print(f"Total races to fetch: {len(races)}")
     
     # Fetch and save
-    ingest.fetch_and_save_races(races, session_code=args.session_code)
+    ingest.fetch_and_save_races(
+        races, 
+        session_code=args.session_code,
+        include_telemetry=include_telemetry
+    )
     
     # Log data manifest
     import json
@@ -88,6 +97,7 @@ def cmd_ingest(args):
         'rounds': rounds,
         'total_races': len(races),
         'session_code': args.session_code,
+        'includes_telemetry': include_telemetry,
     }
     
     with open(metrics_dir / 'data_manifest.json', 'w') as f:
@@ -387,6 +397,7 @@ def main():
     ingest_parser.add_argument('--rounds', type=str, default='1-3', help='Rounds (e.g., 1-10 or 1,2,3)')
     ingest_parser.add_argument('--session-code', type=str, default='R', help='Session code (R, Q, etc.)')
     ingest_parser.add_argument('--era-aware', action='store_true', help='Enable era-aware modeling')
+    ingest_parser.add_argument('--include-telemetry', action='store_true', help='Include telemetry summaries')
     ingest_parser.set_defaults(func=cmd_ingest)
     
     # Clean command

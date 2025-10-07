@@ -456,6 +456,128 @@ def join_circuit_metadata(
     return df
 
 
+def join_telemetry_summaries(
+    df: pd.DataFrame,
+    telemetry_dir: str
+) -> pd.DataFrame:
+    """
+    Join telemetry summaries with lap data.
+    
+    Args:
+        df: DataFrame with session_key, driver, lap columns
+        telemetry_dir: Path to telemetry directory
+    
+    Returns:
+        DataFrame with telemetry features joined
+    """
+    import os
+    from pathlib import Path
+    
+    df = df.copy()
+    
+    telemetry_path = Path(telemetry_dir)
+    
+    if not telemetry_path.exists():
+        print(f"Warning: Telemetry directory not found: {telemetry_dir}")
+        # Add default columns
+        for col in config.TELEMETRY_FEATURES:
+            df[col] = np.nan
+        return df
+    
+    # Load telemetry files for each session
+    telemetry_dfs = []
+    for session_key in df['session_key'].unique():
+        telemetry_file = telemetry_path / f"{session_key}_telemetry_summary.parquet"
+        
+        if telemetry_file.exists():
+            try:
+                telem_df = pd.read_parquet(telemetry_file)
+                telemetry_dfs.append(telem_df)
+            except Exception as e:
+                print(f"Warning: Could not load telemetry for {session_key}: {e}")
+    
+    if len(telemetry_dfs) == 0:
+        print("Warning: No telemetry files loaded")
+        # Add default columns
+        for col in config.TELEMETRY_FEATURES:
+            df[col] = np.nan
+        return df
+    
+    # Combine all telemetry
+    telemetry_all = pd.concat(telemetry_dfs, ignore_index=True)
+    
+    # Join with main dataframe
+    df = df.merge(
+        telemetry_all,
+        on=['session_key', 'driver', 'lap'],
+        how='left'
+    )
+    
+    print(f"✓ Joined telemetry summaries ({len(telemetry_all):,} records)")
+    
+    return df
+
+
+def add_track_evolution_features(
+    df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Add track evolution / grip features.
+    
+    Track evolution captures how the circuit conditions improve over the race
+    due to rubber buildup, track cleaning, temperature changes, etc.
+    
+    Features:
+    - session_lap_ratio: Normalized lap progress (0-1)
+    - track_grip_proxy: Estimated grip improvement based on lap position
+    - sector_evolution_*: Evolution of sector times over the race
+    
+    Args:
+        df: DataFrame with lap data
+    
+    Returns:
+        DataFrame with track evolution features
+    """
+    df = df.copy()
+    
+    # session_lap_ratio: position in race (0 at start, 1 at finish)
+    if 'lap_number' in df.columns:
+        max_lap_per_session = df.groupby('session_key')['lap_number'].transform('max')
+        df['session_lap_ratio'] = df['lap_number'] / max_lap_per_session
+        df['session_lap_ratio'] = df['session_lap_ratio'].clip(0, 1)
+    else:
+        df['session_lap_ratio'] = 0.5
+    
+    # track_grip_proxy: Estimate grip improvement
+    # Grip typically improves as rubber is laid down, then plateaus
+    # Use a logarithmic curve: grip ~ log(1 + lap_ratio * scale)
+    df['track_grip_proxy'] = np.log1p(df['session_lap_ratio'] * 3.0) / np.log1p(3.0)
+    
+    # Sector evolution: rolling median of sector times to track improvement
+    if 'sector1_ms' in df.columns and 'sector2_ms' in df.columns and 'sector3_ms' in df.columns:
+        for sector_num in [1, 2, 3]:
+            sector_col = f'sector{sector_num}_ms'
+            evolution_col = f'sector{sector_num}_evolution'
+            
+            # Calculate rolling median of sector time per session
+            df[evolution_col] = df.groupby('session_key')[sector_col].transform(
+                lambda x: x.rolling(window=10, min_periods=1).median()
+            )
+            
+            # Normalize: evolution = current - rolling_median (negative = improving)
+            df[evolution_col] = df[sector_col] - df[evolution_col]
+    
+    # Lap time improvement rate: track how much faster recent laps are
+    if 'lap_time_ms' in df.columns:
+        # Calculate lap time trend within session
+        df['lap_time_trend'] = df.groupby('session_key')['lap_time_ms'].transform(
+            lambda x: x.rolling(window=5, min_periods=1).mean() - 
+                     x.rolling(window=10, min_periods=1).mean()
+        ).fillna(0.0)
+    
+    return df
+
+
 def create_degradation_target(
     df: pd.DataFrame,
     baseline_lap_time: Optional[float] = None
@@ -560,6 +682,15 @@ def assemble_feature_table(
     circuit_meta_path = lookups_dir / 'circuit_meta.csv'
     df = join_circuit_metadata(df, str(circuit_meta_path))
     print(f"✓ Joined circuit metadata")
+    
+    # Join telemetry summaries (NEW)
+    telemetry_dir = config.paths()['data_raw'] / 'telemetry'
+    df = join_telemetry_summaries(df, str(telemetry_dir))
+    print(f"✓ Joined telemetry summaries")
+    
+    # Add track evolution features (NEW)
+    df = add_track_evolution_features(df)
+    print(f"✓ Added track evolution features")
     
     # Join pit loss lookup
     df = join_pitloss_lookup(df, pitloss_csv_path)

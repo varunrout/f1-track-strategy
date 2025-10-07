@@ -138,6 +138,27 @@ CIRCUIT_META_FEATURES = [
     "elevation_gain_m",
 ]
 
+# Telemetry feature columns (NEW in v0.3+)
+TELEMETRY_FEATURES = [
+    "avg_throttle",
+    "avg_brake",
+    "avg_speed",
+    "max_speed",
+    "corner_time_frac",
+    "gear_shift_rate",
+    "drs_usage_ratio",
+]
+
+# Track evolution feature columns (NEW in v0.3+)
+TRACK_EVOLUTION_FEATURES = [
+    "session_lap_ratio",
+    "track_grip_proxy",
+    "sector1_evolution",
+    "sector2_evolution",
+    "sector3_evolution",
+    "lap_time_trend",
+]
+
 
 def paths() -> Dict[str, Path]:
     """
