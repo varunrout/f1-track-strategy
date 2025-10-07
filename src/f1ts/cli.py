@@ -40,21 +40,61 @@ def parse_rounds(rounds_str: str) -> List[int]:
     return sorted(set(rounds))
 
 
+def parse_seasons(seasons_str: str) -> List[int]:
+    """
+    Parse seasons string into list of year integers.
+    Supports: "2023", "2022,2023", "2018-2024"
+    
+    Args:
+        seasons_str: String specification of seasons
+    
+    Returns:
+        List of season years
+    """
+    seasons = []
+    for part in seasons_str.split(','):
+        part = part.strip()
+        if '-' in part:
+            start, end = part.split('-')
+            seasons.extend(range(int(start), int(end) + 1))
+        else:
+            seasons.append(int(part))
+    return sorted(set(seasons))
+
+
 def cmd_ingest(args):
     """Ingest race data from FastF1."""
-    print(f"Ingesting races for season {args.season}")
-    
-    # Parse rounds
+    # Parse seasons and rounds
+    seasons = parse_seasons(args.seasons) if hasattr(args, 'seasons') else [args.season]
     rounds = parse_rounds(args.rounds)
-    print(f"Rounds to fetch: {rounds}")
+    
+    print(f"Ingesting races for seasons {seasons}, rounds {rounds}")
     
     # Build race list
-    races = [(args.season, round_num) for round_num in rounds]
+    races = [(season, round_num) for season in seasons for round_num in rounds]
+    
+    print(f"Total races to fetch: {len(races)}")
     
     # Fetch and save
     ingest.fetch_and_save_races(races, session_code=args.session_code)
     
+    # Log data manifest
+    import json
+    metrics_dir = config.paths()['metrics']
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    
+    manifest = {
+        'seasons': seasons,
+        'rounds': rounds,
+        'total_races': len(races),
+        'session_code': args.session_code,
+    }
+    
+    with open(metrics_dir / 'data_manifest.json', 'w') as f:
+        json.dump(manifest, f, indent=2)
+    
     print(f"\n✓ Ingestion complete: {len(races)} races")
+    print(f"✓ Data manifest saved to metrics/data_manifest.json")
 
 
 def cmd_clean(args):
@@ -342,9 +382,11 @@ def main():
     
     # Ingest command
     ingest_parser = subparsers.add_parser('ingest', help='Ingest race data')
-    ingest_parser.add_argument('--season', type=int, default=2023, help='Season year')
+    ingest_parser.add_argument('--season', type=int, default=2023, help='Season year (deprecated, use --seasons)')
+    ingest_parser.add_argument('--seasons', type=str, default=None, help='Seasons (e.g., 2018-2024 or 2022,2023)')
     ingest_parser.add_argument('--rounds', type=str, default='1-3', help='Rounds (e.g., 1-10 or 1,2,3)')
     ingest_parser.add_argument('--session-code', type=str, default='R', help='Session code (R, Q, etc.)')
+    ingest_parser.add_argument('--era-aware', action='store_true', help='Enable era-aware modeling')
     ingest_parser.set_defaults(func=cmd_ingest)
     
     # Clean command
@@ -385,9 +427,11 @@ def main():
     
     # Pipeline command
     pipeline_parser = subparsers.add_parser('pipeline', help='Run complete pipeline')
-    pipeline_parser.add_argument('--season', type=int, default=2023, help='Season year')
+    pipeline_parser.add_argument('--season', type=int, default=2023, help='Season year (deprecated, use --seasons)')
+    pipeline_parser.add_argument('--seasons', type=str, default=None, help='Seasons (e.g., 2018-2024 or 2022,2023)')
     pipeline_parser.add_argument('--rounds', type=str, default='1-10', help='Rounds (e.g., 1-10 or 1,2,3)')
     pipeline_parser.add_argument('--session-code', type=str, default='R', help='Session code')
+    pipeline_parser.add_argument('--monte-carlo', type=int, default=None, help='Monte Carlo samples for optimizer')
     pipeline_parser.set_defaults(func=cmd_pipeline)
     
     args = parser.parse_args()

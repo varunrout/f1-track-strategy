@@ -27,10 +27,14 @@ DEG_SLOPE_WINDOW = 5
 MIN_LAPS_PER_RACE = 50
 MAX_LAP_TIME_MAD_MULTIPLIER = 5
 
-# Model quality gates (initial, lenient)
-DEG_MAE_THRESHOLD = 0.08  # seconds
-PITLOSS_MAE_THRESHOLD = 0.8  # seconds
-HAZARD_BRIER_THRESHOLD = 0.12
+# Model quality gates (enhanced targets)
+DEG_MAE_THRESHOLD = 0.075  # seconds (enhanced target)
+PITLOSS_MAE_THRESHOLD = 0.70  # seconds (enhanced target)
+HAZARD_BRIER_THRESHOLD = 0.11  # enhanced target
+
+# Quantile coverage targets
+DEG_QUANTILE_COVERAGE_P90_MIN = 0.88
+DEG_QUANTILE_COVERAGE_P90_MAX = 0.92
 
 # Compounds
 VALID_COMPOUNDS = ["SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET"]
@@ -50,6 +54,26 @@ COMPOUND_MAPPING = {
 
 # Session codes
 SESSION_CODES = ["FP1", "FP2", "FP3", "Q", "R"]
+
+# Era definitions (for regulation-aware modeling)
+ERAS = {
+    "pre_2022": list(range(2018, 2022)),
+    "post_2022": list(range(2022, 2025)),
+}
+
+# Hyperparameter optimization settings
+HPO_ENABLED = True
+HPO_N_TRIALS = 20
+HPO_TIMEOUT = 300  # seconds
+
+# Risk-aware optimization settings
+MONTE_CARLO_N_SAMPLES = 1000
+RISK_CVAR_ALPHA = 0.95
+RISK_P95_PERCENTILE = 0.95
+
+# Pit loss SC/VSC multipliers
+PIT_LOSS_SC_MULTIPLIER = 0.5  # 50% time saving under SC
+PIT_LOSS_VSC_MULTIPLIER = 0.7  # 30% time saving under VSC
 
 # Feature lists
 REQUIRED_STINT_FEATURE_COLS = [
@@ -88,6 +112,30 @@ CATEGORICAL_FEATURES = [
     "compound",
     "circuit_name",
     "track_status",
+]
+
+# Extended feature columns for enriched modeling
+PACK_DYNAMICS_FEATURES = [
+    "front_gap_s",
+    "rear_gap_s",
+    "pack_density_3s",
+    "pack_density_5s",
+    "clean_air",
+]
+
+RACE_CONTEXT_FEATURES = [
+    "grid_position",
+    "team_id",
+    "track_evolution_lap_ratio",
+]
+
+CIRCUIT_META_FEATURES = [
+    "abrasiveness",
+    "pit_lane_length_m",
+    "pit_speed_kmh",
+    "drs_zones",
+    "high_speed_turn_share",
+    "elevation_gain_m",
 ]
 
 

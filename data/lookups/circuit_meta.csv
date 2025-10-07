@@ -1,0 +1,24 @@
+circuit_name,abrasiveness,pit_lane_length_m,pit_speed_kmh,drs_zones,high_speed_turn_share,elevation_gain_m
+Bahrain International Circuit,0.75,380,60,3,0.35,7
+Jeddah Corniche Circuit,0.60,295,60,3,0.55,15
+Albert Park Circuit,0.65,340,60,3,0.40,10
+Baku City Circuit,0.70,360,60,2,0.50,18
+Miami International Autodrome,0.60,355,60,3,0.45,5
+Autodromo Enzo e Dino Ferrari,0.80,310,60,2,0.50,35
+Circuit de Monaco,0.55,245,60,1,0.05,42
+Circuit de Barcelona-Catalunya,0.75,340,60,2,0.40,35
+Circuit Gilles Villeneuve,0.60,320,60,3,0.50,3
+Red Bull Ring,0.70,285,60,3,0.60,65
+Silverstone Circuit,0.85,350,60,2,0.65,18
+Hungaroring,0.70,370,60,1,0.10,40
+Circuit de Spa-Francorchamps,0.65,385,60,2,0.70,105
+Circuit Zandvoort,0.75,290,60,2,0.55,4
+Autodromo Nazionale di Monza,0.55,335,60,2,0.75,15
+Marina Bay Street Circuit,0.55,425,60,3,0.35,5
+Suzuka International Racing Course,0.75,400,60,2,0.65,42
+Losail International Circuit,0.70,340,60,2,0.55,10
+Circuit of the Americas,0.80,370,60,2,0.50,41
+Autódromo Hermanos Rodríguez,0.70,340,60,3,0.45,15
+Autódromo José Carlos Pace,0.75,330,60,2,0.40,32
+Las Vegas Street Circuit,0.50,355,60,2,0.60,5
+Yas Marina Circuit,0.60,360,60,2,0.45,8
