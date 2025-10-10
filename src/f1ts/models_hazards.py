@@ -175,3 +175,148 @@ def compute_circuit_hazard_rates(
     circuit_laps['vsc_per_10laps'] = (circuit_laps['vsc_count'] / circuit_laps['total_laps']) * 10
     
     return circuit_laps[['circuit_name', 'sc_per_10laps', 'vsc_per_10laps']]
+
+
+def train_discrete_time_hazard(
+    X: pd.DataFrame,
+    y: pd.Series,
+    circuit_col: str = 'circuit_name'
+) -> Tuple[LogisticRegression, dict]:
+    """
+    Train discrete-time hazard model with circuit-level features.
+    
+    Args:
+        X: Features including lap_number, circuit, pack_density, etc.
+        y: Binary target (hazard event occurred)
+        circuit_col: Column name for circuit grouping
+    
+    Returns:
+        Tuple of (trained model, circuit effects dict)
+    """
+    from sklearn.preprocessing import StandardScaler
+    
+    X_train = X.copy()
+    
+    # One-hot encode circuit if present
+    if circuit_col in X_train.columns:
+        X_train = pd.get_dummies(X_train, columns=[circuit_col], drop_first=True)
+    
+    # Scale numeric features
+    numeric_cols = X_train.select_dtypes(include=[np.number]).columns
+    scaler = StandardScaler()
+    X_train[numeric_cols] = scaler.fit_transform(X_train[numeric_cols])
+    
+    # Train logistic regression with regularization
+    model = LogisticRegression(
+        random_state=config.RANDOM_SEED,
+        max_iter=1000,
+        penalty='l2',
+        C=1.0  # Regularization strength
+    )
+    model.fit(X_train, y)
+    
+    # Extract circuit effects (hierarchical shrinkage approximation)
+    circuit_effects = {}
+    for i, col in enumerate(X_train.columns):
+        if col.startswith('circuit_name_'):
+            circuit_name = col.replace('circuit_name_', '')
+            circuit_effects[circuit_name] = model.coef_[0][i]
+    
+    return model, circuit_effects
+
+
+def calibrate_probabilities(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray
+) -> Tuple:
+    """
+    Calibrate probabilities using isotonic regression.
+    
+    Args:
+        y_true: True binary labels
+        y_pred_proba: Predicted probabilities
+    
+    Returns:
+        Tuple of (calibrator, calibrated_proba)
+    """
+    from sklearn.isotonic import IsotonicRegression
+    
+    calibrator = IsotonicRegression(out_of_bounds='clip')
+    calibrator.fit(y_pred_proba, y_true)
+    
+    y_calibrated = calibrator.predict(y_pred_proba)
+    
+    return calibrator, y_calibrated
+
+
+def compute_reliability_curve(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    n_bins: int = 10
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute reliability (calibration) curve.
+    
+    Args:
+        y_true: True binary labels
+        y_pred_proba: Predicted probabilities
+        n_bins: Number of bins for grouping predictions
+    
+    Returns:
+        Tuple of (mean_predicted_prob, fraction_positives)
+    """
+    from sklearn.calibration import calibration_curve
+    
+    fraction_positives, mean_predicted = calibration_curve(
+        y_true, y_pred_proba, n_bins=n_bins, strategy='uniform'
+    )
+    
+    return mean_predicted, fraction_positives
+
+
+def evaluate_calibration(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    y_calibrated: Optional[np.ndarray] = None
+) -> dict:
+    """
+    Evaluate calibration quality of hazard predictions.
+    
+    Args:
+        y_true: True binary labels
+        y_pred_proba: Raw predicted probabilities
+        y_calibrated: Optional calibrated probabilities
+    
+    Returns:
+        Dictionary with calibration metrics
+    """
+    # Brier score (lower is better)
+    brier_raw = brier_score_loss(y_true, y_pred_proba)
+    
+    metrics = {
+        'brier_score_raw': brier_raw,
+        'n_samples': len(y_true),
+        'event_rate': y_true.mean(),
+    }
+    
+    if y_calibrated is not None:
+        brier_calibrated = brier_score_loss(y_true, y_calibrated)
+        metrics['brier_score_calibrated'] = brier_calibrated
+        metrics['brier_improvement'] = brier_raw - brier_calibrated
+    
+    # Reliability curve
+    mean_pred, frac_pos = compute_reliability_curve(y_true, y_pred_proba)
+    
+    # Calibration error (mean absolute difference from perfect calibration)
+    calibration_error = np.mean(np.abs(mean_pred - frac_pos))
+    metrics['calibration_error'] = calibration_error
+    
+    print("Hazard Model Calibration:")
+    print(f"  Brier Score (raw): {brier_raw:.4f}")
+    if y_calibrated is not None:
+        print(f"  Brier Score (calibrated): {brier_calibrated:.4f}")
+        print(f"  Improvement: {metrics['brier_improvement']:.4f}")
+    print(f"  Calibration Error: {calibration_error:.4f}")
+    print(f"  Event Rate: {y_true.mean():.2%}")
+    
+    return metrics

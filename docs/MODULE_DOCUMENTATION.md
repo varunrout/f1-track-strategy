@@ -541,8 +541,8 @@ Add circuit name, total laps from sessions table.
 
 ### Main Function
 
-#### `assemble_features(laps: pd.DataFrame, sessions: pd.DataFrame, pitloss_csv: str, hazard_csv: str) -> pd.DataFrame`
-Create complete feature table.
+#### `assemble_feature_table(laps_processed: pd.DataFrame, sessions: pd.DataFrame, pitloss_csv_path: str, hazard_csv_path: str) -> pd.DataFrame`
+Create complete feature table (rolling pace, pack dynamics, race context, circuit metadata, telemetry summaries, track evolution, pit loss, hazard baselines, degradation target).
 
 **Steps**:
 1. Add rolling pace features
@@ -551,7 +551,10 @@ Create complete feature table.
 4. Add stint position
 5. Create compound interactions
 6. Create weather interactions
-7. Join lookup tables
+7. Join lookup tables (pit loss, hazard priors)
+8. Join telemetry summaries (if available)
+9. Add track evolution features
+10. Create degradation target
 
 **Returns**: Wide feature table with 20+ columns.
 
@@ -604,7 +607,7 @@ Add driver performance baselines.
 
 **Purpose**: Normalize for driver skill differences.
 
-#### `add_stint_position(df: pd.DataFrame) -> pd.DataFrame`
+#### `add_stint_position_features(df: pd.DataFrame) -> pd.DataFrame`
 Add stint and race position indicators.
 
 **Creates columns**:
@@ -619,6 +622,26 @@ Create compound-based interaction features.
 - `compound_x_age`: Interaction between compound and tyre age
 
 #### `create_weather_interactions(df: pd.DataFrame) -> pd.DataFrame`
+#### `add_pack_dynamics_features(df: pd.DataFrame, gap_threshold_clean_air: float = 2.0) -> pd.DataFrame`
+Front/rear gaps, pack density, clean air indicator.
+
+#### `add_race_context_features(df: pd.DataFrame, sessions: Optional[pd.DataFrame] = None) -> pd.DataFrame`
+Grid position proxy, team id, track evolution lap ratio.
+
+#### `join_circuit_metadata(df: pd.DataFrame, circuit_meta_csv_path: str) -> pd.DataFrame`
+Join circuit metadata (abrasiveness, pit lane geometry, DRS zones, elevation).
+
+#### `join_telemetry_summaries(df: pd.DataFrame, telemetry_dir: str) -> pd.DataFrame`
+Join per-lap telemetry summaries from `data/raw/telemetry/{session_key}_telemetry_summary.parquet`. Adds columns: avg_throttle, avg_brake, avg/max_speed, corner_time_frac, gear_shift_rate, drs_usage_ratio.
+
+#### `add_track_evolution_features(df: pd.DataFrame) -> pd.DataFrame`
+Adds session_lap_ratio, track_grip_proxy, sector evolution deltas, lap_time_trend.
+
+#### `baseline_hazards(df: pd.DataFrame, hazard_csv_path: str, lookahead: int = 5) -> pd.DataFrame`
+Add baseline hazard probabilities using `hazard_priors.csv` columns `sc_per_10laps`, `vsc_per_10laps` scaled to the lookahead.
+
+#### `create_degradation_target(df: pd.DataFrame, baseline_lap_time: Optional[float] = None) -> pd.DataFrame`
+Creates `target_deg_ms` adjusted for simple fuel proxy and circuit-compound baseline.
 Create weather interaction features.
 
 **Creates columns**:

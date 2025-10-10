@@ -25,7 +25,7 @@ The F1 Tyre Strategy system uses three complementary models:
 |-------|-----------|---------|--------|--------------|
 | **Degradation** | LightGBM | Predict tyre wear | Lap time increase (ms) | MAE ≤ 0.08s |
 | **Pit Loss** | Lookup + Regression | Estimate pit stop time | Pit time loss (s) | MAE ≤ 0.8s |
-| **Hazard** | Poisson Process | Predict safety car probability | SC/VSC occurrence | Brier ≤ 0.12 |
+| **Hazard** | Discrete-time logistic + calibration | Predict safety car probability | SC/VSC occurrence | Brier ≤ 0.11 |
 
 ### Model Interaction
 
@@ -427,42 +427,28 @@ validation.validate_pitloss_model_quality(mae)
 
 ### Approach
 
-**Method**: Circuit-specific historical rates + Poisson process
+**Method**: Discrete-time hazard with logistic regression + calibration
 
-**Why Poisson?**
-- SC events are rare and independent
-- Poisson distribution models count of events in interval
-- Simple and interpretable
+**Why discrete-time hazard?**
+- Models event probability at each lap conditioned on no prior event
+- Accommodates time-varying risk (early/late race effects)
+- Supports circuit effects and calibration
 
-### Hazard Rate Calculation
+### Baseline Priors
 
-**From historical data**:
-```python
-sc_rate = (total_sc_laps / total_race_laps) * 100
-vsc_rate = (total_vsc_laps / total_race_laps) * 100
-```
+We seed with circuit priors measured as rate per 10 laps:
 
-**Example calculation**:
-```
-Monaco (5 historical races):
-- Total laps: 5 × 78 = 390 laps
-- SC laps: 156 laps
-- SC rate: 156 / 390 = 40%
+```csv
+circuit_name,sc_per_10laps,vsc_per_10laps
+Circuit de Monaco,0.48,0.20
+Marina Bay Street Circuit,0.52,0.22
 ```
 
 ### Lookup Table
 
 **Source**: `data/lookups/hazard_priors.csv`
 
-**Sample data**:
-```csv
-circuit_name,sc_rate_pct,vsc_rate_pct,total_races
-Monaco,40.0,15.0,5
-Singapore,35.0,18.0,4
-Baku,35.0,20.0,3
-Bahrain,10.0,5.0,10
-Silverstone,12.0,6.0,8
-```
+Columns: `sc_per_10laps`, `vsc_per_10laps`.
 
 **Circuit categories**:
 - **High hazard** (30-40%): Street circuits (Monaco, Singapore, Baku)
@@ -483,28 +469,21 @@ hazard_rates = models_hazards.compute_circuit_hazard_rates(
 hazard_rates.to_csv('data/lookups/hazard_computed.csv', index=False)
 ```
 
-### Prediction
+### Model and Calibration
 
-**Simple model**: Use historical rate
+Train discrete-time hazard and calibrate with isotonic regression:
+
 ```python
-prob = models_hazards.predict_hazard_probability(
-    lap_number=30,
-    circuit_name='Monaco',
-    lookup_df=hazard_rates
+model, circuit_effects = models_hazards.train_discrete_time_hazard(
+    X_train, y_train, circuit_col='circuit_name'
 )
-print(f"SC probability: {prob:.2%}")  # ~40%
-```
-
-**Poisson model**: Time-dependent probability
-```python
-lambda_rate = sc_rate_pct / 100  # Events per lap
-n_laps_ahead = 10  # Next 10 laps
-prob = 1 - exp(-lambda_rate * n_laps_ahead)
+calibrator, y_cal = models_hazards.calibrate_probabilities(y_true, y_pred_proba)
+metrics = models_hazards.evaluate_calibration(y_true, y_pred_proba, y_cal)
 ```
 
 ### Performance Metrics
 
-**Target**: Brier score ≤ 0.12
+**Target**: Brier score ≤ 0.11; calibration error < 0.03
 
 **Brier score**: Mean squared error for probabilistic predictions
 ```python

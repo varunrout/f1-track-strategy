@@ -297,6 +297,287 @@ def baseline_hazards(
     return df
 
 
+def add_pack_dynamics_features(
+    df: pd.DataFrame,
+    gap_threshold_clean_air: float = 2.0
+) -> pd.DataFrame:
+    """
+    Add pack dynamics features: front/rear gaps, pack density, clean air.
+    
+    Args:
+        df: DataFrame with lap data sorted by session_key, lap, and position
+        gap_threshold_clean_air: Gap threshold in seconds for clean air
+    
+    Returns:
+        DataFrame with pack dynamics features
+    """
+    df = df.copy()
+    
+    # Sort by session, lap, and position (if available)
+    sort_cols = ['session_key', 'lap']
+    if 'position' in df.columns:
+        sort_cols.append('position')
+    df = df.sort_values(sort_cols)
+    
+    # Initialize new columns
+    df['front_gap_s'] = np.nan
+    df['rear_gap_s'] = np.nan
+    df['pack_density_3s'] = 0
+    df['pack_density_5s'] = 0
+    df['clean_air'] = 0
+    
+    # Calculate gaps per lap
+    for (session_key, lap), group in df.groupby(['session_key', 'lap']):
+        if 'position' not in group.columns or len(group) < 2:
+            continue
+        
+        # Sort by position
+        group = group.sort_values('position')
+        positions = group['position'].values
+        
+        # Calculate cumulative time (assuming lap_time_ms represents position in race)
+        # This is approximate - ideally we'd have sector times or gap data
+        if 'lap_time_ms' in group.columns:
+            # Estimate gaps based on lap time differences (simplified)
+            lap_times = group['lap_time_ms'].values
+            
+            for i, idx in enumerate(group.index):
+                # Front gap (to car ahead)
+                if i > 0:
+                    # Approximate gap based on lap time difference
+                    df.loc[idx, 'front_gap_s'] = abs(lap_times[i] - lap_times[i-1]) / 1000.0
+                else:
+                    df.loc[idx, 'front_gap_s'] = 5.0  # Leader, assume large gap
+                
+                # Rear gap (to car behind)
+                if i < len(group) - 1:
+                    df.loc[idx, 'rear_gap_s'] = abs(lap_times[i+1] - lap_times[i]) / 1000.0
+                else:
+                    df.loc[idx, 'rear_gap_s'] = 5.0  # Last place
+                
+                # Pack density: count cars within time windows
+                # Count cars within ±3s and ±5s (simplified using lap time proximity)
+                time_diffs = np.abs(lap_times - lap_times[i]) / 1000.0
+                df.loc[idx, 'pack_density_3s'] = np.sum(time_diffs <= 3.0) - 1  # Exclude self
+                df.loc[idx, 'pack_density_5s'] = np.sum(time_diffs <= 5.0) - 1
+    
+    # Clean air indicator
+    df['clean_air'] = (df['front_gap_s'] > gap_threshold_clean_air).astype(int)
+    
+    # Fill NaN values with reasonable defaults
+    df['front_gap_s'] = df['front_gap_s'].fillna(3.0)
+    df['rear_gap_s'] = df['rear_gap_s'].fillna(3.0)
+    
+    return df
+
+
+def add_race_context_features(
+    df: pd.DataFrame,
+    sessions: Optional[pd.DataFrame] = None
+) -> pd.DataFrame:
+    """
+    Add race context features: grid position, team ID, track evolution.
+    
+    Args:
+        df: DataFrame with lap data
+        sessions: Optional session metadata
+    
+    Returns:
+        DataFrame with race context features
+    """
+    df = df.copy()
+    
+    # Grid position (starting position in race)
+    if 'position' in df.columns:
+        # Get first lap position as grid position proxy
+        grid_pos = df.groupby(['session_key', 'driver'])['position'].first()
+        df['grid_position'] = df.set_index(['session_key', 'driver']).index.map(grid_pos)
+        df['grid_position'] = df['grid_position'].fillna(20)
+    else:
+        df['grid_position'] = 10  # Default mid-grid
+    
+    # Team ID (if available in driver code patterns)
+    df['team_id'] = 'UNKNOWN'
+    
+    # Track evolution: lap number as ratio of total laps
+    if 'lap_number' in df.columns:
+        if 'total_laps' in df.columns:
+            df['track_evolution_lap_ratio'] = df['lap_number'] / df['total_laps']
+        else:
+            # Estimate total laps from max lap per session
+            max_laps = df.groupby('session_key')['lap_number'].transform('max')
+            df['track_evolution_lap_ratio'] = df['lap_number'] / max_laps
+    else:
+        df['track_evolution_lap_ratio'] = 0.5  # Mid-race default
+    
+    # Clip to [0, 1]
+    df['track_evolution_lap_ratio'] = df['track_evolution_lap_ratio'].clip(0, 1)
+    
+    return df
+
+
+def join_circuit_metadata(
+    df: pd.DataFrame,
+    circuit_meta_csv_path: str
+) -> pd.DataFrame:
+    """
+    Join circuit metadata (abrasiveness, pit lane geometry, etc.).
+    
+    Args:
+        df: DataFrame with circuit_name
+        circuit_meta_csv_path: Path to circuit metadata CSV
+    
+    Returns:
+        DataFrame with circuit metadata columns
+    """
+    import os
+    
+    df = df.copy()
+    
+    if os.path.exists(circuit_meta_csv_path):
+        circuit_meta = pd.read_csv(circuit_meta_csv_path)
+        
+        if 'circuit_name' in df.columns and 'circuit_name' in circuit_meta.columns:
+            df = df.merge(
+                circuit_meta,
+                on='circuit_name',
+                how='left'
+            )
+            
+            # Fill missing values with medians
+            for col in config.CIRCUIT_META_FEATURES:
+                if col in df.columns:
+                    df[col] = df[col].fillna(df[col].median())
+    else:
+        # Add default values if file doesn't exist
+        for col in config.CIRCUIT_META_FEATURES:
+            df[col] = 0.0
+    
+    return df
+
+
+def join_telemetry_summaries(
+    df: pd.DataFrame,
+    telemetry_dir: str
+) -> pd.DataFrame:
+    """
+    Join telemetry summaries with lap data.
+    
+    Args:
+        df: DataFrame with session_key, driver, lap columns
+        telemetry_dir: Path to telemetry directory
+    
+    Returns:
+        DataFrame with telemetry features joined
+    """
+    import os
+    from pathlib import Path
+    
+    df = df.copy()
+    
+    telemetry_path = Path(telemetry_dir)
+    
+    if not telemetry_path.exists():
+        print(f"Warning: Telemetry directory not found: {telemetry_dir}")
+        # Add default columns
+        for col in config.TELEMETRY_FEATURES:
+            df[col] = np.nan
+        return df
+    
+    # Load telemetry files for each session
+    telemetry_dfs = []
+    for session_key in df['session_key'].unique():
+        telemetry_file = telemetry_path / f"{session_key}_telemetry_summary.parquet"
+        
+        if telemetry_file.exists():
+            try:
+                telem_df = pd.read_parquet(telemetry_file)
+                telemetry_dfs.append(telem_df)
+            except Exception as e:
+                print(f"Warning: Could not load telemetry for {session_key}: {e}")
+    
+    if len(telemetry_dfs) == 0:
+        print("Warning: No telemetry files loaded")
+        # Add default columns
+        for col in config.TELEMETRY_FEATURES:
+            df[col] = np.nan
+        return df
+    
+    # Combine all telemetry
+    telemetry_all = pd.concat(telemetry_dfs, ignore_index=True)
+    
+    # Join with main dataframe
+    df = df.merge(
+        telemetry_all,
+        on=['session_key', 'driver', 'lap'],
+        how='left'
+    )
+    
+    print(f"✓ Joined telemetry summaries ({len(telemetry_all):,} records)")
+    
+    return df
+
+
+def add_track_evolution_features(
+    df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Add track evolution / grip features.
+    
+    Track evolution captures how the circuit conditions improve over the race
+    due to rubber buildup, track cleaning, temperature changes, etc.
+    
+    Features:
+    - session_lap_ratio: Normalized lap progress (0-1)
+    - track_grip_proxy: Estimated grip improvement based on lap position
+    - sector_evolution_*: Evolution of sector times over the race
+    
+    Args:
+        df: DataFrame with lap data
+    
+    Returns:
+        DataFrame with track evolution features
+    """
+    df = df.copy()
+    
+    # session_lap_ratio: position in race (0 at start, 1 at finish)
+    if 'lap_number' in df.columns:
+        max_lap_per_session = df.groupby('session_key')['lap_number'].transform('max')
+        df['session_lap_ratio'] = df['lap_number'] / max_lap_per_session
+        df['session_lap_ratio'] = df['session_lap_ratio'].clip(0, 1)
+    else:
+        df['session_lap_ratio'] = 0.5
+    
+    # track_grip_proxy: Estimate grip improvement
+    # Grip typically improves as rubber is laid down, then plateaus
+    # Use a logarithmic curve: grip ~ log(1 + lap_ratio * scale)
+    df['track_grip_proxy'] = np.log1p(df['session_lap_ratio'] * 3.0) / np.log1p(3.0)
+    
+    # Sector evolution: rolling median of sector times to track improvement
+    if 'sector1_ms' in df.columns and 'sector2_ms' in df.columns and 'sector3_ms' in df.columns:
+        for sector_num in [1, 2, 3]:
+            sector_col = f'sector{sector_num}_ms'
+            evolution_col = f'sector{sector_num}_evolution'
+            
+            # Calculate rolling median of sector time per session
+            df[evolution_col] = df.groupby('session_key')[sector_col].transform(
+                lambda x: x.rolling(window=10, min_periods=1).median()
+            )
+            
+            # Normalize: evolution = current - rolling_median (negative = improving)
+            df[evolution_col] = df[sector_col] - df[evolution_col]
+    
+    # Lap time improvement rate: track how much faster recent laps are
+    if 'lap_time_ms' in df.columns:
+        # Calculate lap time trend within session
+        df['lap_time_trend'] = df.groupby('session_key')['lap_time_ms'].transform(
+            lambda x: x.rolling(window=5, min_periods=1).mean() - 
+                     x.rolling(window=10, min_periods=1).mean()
+        ).fillna(0.0)
+    
+    return df
+
+
 def create_degradation_target(
     df: pd.DataFrame,
     baseline_lap_time: Optional[float] = None
@@ -388,6 +669,29 @@ def assemble_feature_table(
     df = add_weather_interactions(df)
     print(f"✓ Added weather interactions")
     
+    # Add pack dynamics features (NEW)
+    df = add_pack_dynamics_features(df)
+    print(f"✓ Added pack dynamics features")
+    
+    # Add race context features (NEW)
+    df = add_race_context_features(df, sessions)
+    print(f"✓ Added race context features")
+    
+    # Join circuit metadata (NEW)
+    lookups_dir = config.paths()['data_lookups']
+    circuit_meta_path = lookups_dir / 'circuit_meta.csv'
+    df = join_circuit_metadata(df, str(circuit_meta_path))
+    print(f"✓ Joined circuit metadata")
+    
+    # Join telemetry summaries (NEW)
+    telemetry_dir = config.paths()['data_raw'] / 'telemetry'
+    df = join_telemetry_summaries(df, str(telemetry_dir))
+    print(f"✓ Joined telemetry summaries")
+    
+    # Add track evolution features (NEW)
+    df = add_track_evolution_features(df)
+    print(f"✓ Added track evolution features")
+    
     # Join pit loss lookup
     df = join_pitloss_lookup(df, pitloss_csv_path)
     print(f"✓ Joined pit loss lookup")
@@ -418,27 +722,6 @@ def assemble_feature_table(
     print(f"✓ Feature table complete: {len(df):,} rows, {len(df.columns)} columns")
     
     return df
-    print(f"✓ Added hazard baselines")
-    
-    # Create degradation target
-    df = create_degradation_target(df)
-    print(f"✓ Created degradation target")
-    
-    # Ensure all required columns exist
-    for col in config.REQUIRED_STINT_FEATURE_COLS:
-        if col not in df.columns:
-            print(f"Warning: Required column '{col}' missing, filling with default")
-            if col in ['pace_delta_roll3', 'pace_delta_roll5', 'deg_slope_last5']:
-                df[col] = 0.0
-            elif col == 'track_status':
-                df[col] = '1'
-            elif col == 'pit_loss_s':
-                df[col] = 24.0
-    
-    # Fill remaining NaN values
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    df[numeric_cols] = df[numeric_cols].fillna(0)
-    
     print(f"✓ Feature table complete: {len(df):,} rows, {len(df.columns)} columns")
     
     return df

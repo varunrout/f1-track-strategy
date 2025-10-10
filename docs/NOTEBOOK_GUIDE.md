@@ -97,6 +97,7 @@ For each race session:
 - `data/raw/{session_key}_laps.parquet`: Lap-by-lap data
 - `data/raw/{session_key}_pitstops.csv`: Pit stop data
 - `data/raw/{session_key}_weather.csv`: Weather data
+ - `data/raw/telemetry/{session_key}_telemetry_summary.parquet`: Telemetry summaries (optional)
 
 ### Process
 
@@ -363,7 +364,7 @@ Stints with full data: ~800-1,200
 - `data/processed/laps_processed.parquet`
 - `data/raw/sessions.csv`
 - `data/lookups/pitloss_by_circuit.csv`
-- `data/lookups/hazard_priors.csv`
+- `data/lookups/hazard_priors.csv` (columns: sc_per_10laps, vsc_per_10laps)
 
 ### Outputs
 
@@ -378,6 +379,8 @@ Stints with full data: ~800-1,200
 5. **Create compound interactions**: Compound × age
 6. **Create weather interactions**: Air-track temp delta
 7. **Join lookup tables**: Pit loss and hazard priors
+8. **Join telemetry summaries** (if available): Adds avg_throttle, avg_brake, avg_speed, max_speed, corner_time_frac, gear_shift_rate, drs_usage_ratio from `data/raw/telemetry/*_telemetry_summary.parquet`
+9. **Add track evolution features**: session_lap_ratio, track_grip_proxy, sector1/2/3_evolution, lap_time_trend
 
 ### Feature Engineering Details
 
@@ -454,7 +457,7 @@ pitloss_lookup = pd.read_csv('data/lookups/pitloss_by_circuit.csv')
 laps = laps.merge(pitloss_lookup, on='circuit_name', how='left')
 ```
 
-**Hazard Rates**:
+**Hazard Priors**:
 ```python
 hazard_lookup = pd.read_csv('data/lookups/hazard_priors.csv')
 laps = laps.merge(hazard_lookup, on='circuit_name', how='left')
@@ -484,6 +487,8 @@ validation.validate_stint_features(stint_features)
 - No nulls in required columns
 - Valid compounds
 - Reasonable value ranges
+ - Telemetry columns present if telemetry was ingested
+ - Track evolution columns present
 
 ### Expected Output Statistics
 
@@ -723,7 +728,7 @@ model.fit(X, y)
 
 ## 07_model_hazards.ipynb
 
-**Purpose**: Compute safety car probability model.
+**Purpose**: Compute and calibrate safety car/VSC probability model.
 
 ### Inputs
 
@@ -733,19 +738,23 @@ model.fit(X, y)
 
 ### Outputs
 
-- `data/lookups/hazard_computed.csv`: Computed hazard rates
+- `data/lookups/hazard_computed.csv`: Computed hazard rates (columns: sc_per_10laps, vsc_per_10laps)
+- `metrics/hazard_calibration.json`: Calibration metrics (Brier score, calibration error)
 
 ### Process
 
 1. **Load events** (SC, VSC, flags)
 2. **Count SC/VSC laps** per circuit
 3. **Count total laps** per circuit
-4. **Calculate rates**:
-   ```python
-   sc_rate = (sc_laps / total_laps) * 100
-   vsc_rate = (vsc_laps / total_laps) * 100
-   ```
+4. **Calculate per-10-lap rates**:
+    ```python
+    sc_per_10laps = (sc_laps / total_laps) * 10
+    vsc_per_10laps = (vsc_laps / total_laps) * 10
+    ```
 5. **Save to lookup table**
+6. **Train discrete-time logistic hazard model** (optional)
+7. **Calibrate predicted probabilities** with isotonic regression
+8. **Evaluate calibration**: Brier score and reliability curve
 
 ### Calculation
 
@@ -761,10 +770,10 @@ print(hazard_rates.head())
 
 **Output**:
 ```
-circuit_name    sc_rate_pct  vsc_rate_pct  total_races
-Monaco          40.0         15.0          1
-Baku            35.0         20.0          1
-Bahrain         10.0         5.0           1
+circuit_name    sc_per_10laps  vsc_per_10laps
+Monaco          0.60           0.25
+Baku            0.50           0.30
+Bahrain         0.15           0.10
 ```
 
 ### Interpretation
@@ -787,7 +796,7 @@ prob = models_hazards.predict_hazard_probability(
     circuit_name='Monaco',
     lookup_df=hazard_rates
 )
-print(f"SC probability: {prob:.2%}")  # ~15-20%
+print(f"SC probability (next N laps): {prob:.2%}")
 ```
 
 ### Model Enhancement (Future)
@@ -810,7 +819,7 @@ Current model: Simple historical rate.
 - Trained models:
   - `models/degradation.pkl`
   - `data/lookups/pitloss_by_circuit.csv`
-  - `data/lookups/hazard_computed.csv`
+    - `data/lookups/hazard_computed.csv` (sc_per_10laps, vsc_per_10laps)
 - `data/features/stint_features.parquet`
 
 ### Outputs
@@ -916,6 +925,8 @@ print(top_strategies[['strategy', 'exp_finish_time_s', 'deg_time_s', 'pit_time_s
 - Fewer stops: More degradation but fewer pit losses
 - Soft tyre: Fast but degrades quickly
 - Hard tyre: Slow but consistent
+
+Optional (risk-aware): Use Monte Carlo with hazard/degradation uncertainty to choose strategies optimizing CVaR or probability of beating a baseline.
 
 ### Constraints
 

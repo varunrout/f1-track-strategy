@@ -201,18 +201,216 @@ def rank_strategies(
     return df
 
 
+def simulate_strategy_monte_carlo(
+    strategy: Dict,
+    current_lap: int,
+    total_laps: int,
+    quantile_models: Optional[Dict] = None,
+    hazard_model: Optional[object] = None,
+    context: Dict = {},
+    n_samples: int = None
+) -> Dict:
+    """
+    Monte Carlo simulation of a strategy with uncertainty.
+    
+    Args:
+        strategy: Strategy dictionary
+        current_lap: Current lap
+        total_laps: Total race laps
+        quantile_models: Dictionary of quantile regression models
+        hazard_model: Trained hazard model for SC/VSC events
+        context: Race context (circuit, temps, etc.)
+        n_samples: Number of Monte Carlo samples
+    
+    Returns:
+        Dictionary with distribution of outcomes
+    """
+    if n_samples is None:
+        n_samples = config.MONTE_CARLO_N_SAMPLES
+    
+    samples = []
+    
+    for _ in range(n_samples):
+        # Sample degradation from quantile distribution
+        # For simplicity, sample uniformly between P50 and P90
+        deg_multiplier = np.random.uniform(0.8, 1.2)
+        
+        # Sample SC/VSC events
+        # For simplicity, use base hazard rate
+        sc_occurred = np.random.rand() < 0.1  # 10% chance
+        
+        # Simulate with sampled parameters
+        base_time = simulate_strategy(
+            strategy,
+            current_lap,
+            total_laps,
+            {},
+            context,
+            context.get('pit_loss_s', 24.0)
+        )
+        
+        # Adjust for degradation uncertainty
+        base_time *= deg_multiplier
+        
+        # Adjust for SC (benefits early pits)
+        if sc_occurred and len(strategy['stop_laps']) > 0:
+            # Rough approximation: SC gives time benefit
+            base_time -= np.random.uniform(0, 5)
+        
+        samples.append(base_time)
+    
+    samples = np.array(samples)
+    
+    # Compute statistics
+    result = {
+        'strategy': strategy,
+        'mean_time_s': np.mean(samples),
+        'std_time_s': np.std(samples),
+        'p50_time_s': np.percentile(samples, 50),
+        'p90_time_s': np.percentile(samples, 90),
+        'p95_time_s': np.percentile(samples, 95),
+        'samples': samples,
+    }
+    
+    return result
+
+
+def compute_cvar(
+    samples: np.ndarray,
+    alpha: float = None
+) -> float:
+    """
+    Compute Conditional Value at Risk (CVaR) at confidence level alpha.
+    
+    Args:
+        samples: Array of outcome samples (e.g., finish times)
+        alpha: Confidence level (default from config)
+    
+    Returns:
+        CVaR value (expected value in worst alpha tail)
+    """
+    if alpha is None:
+        alpha = config.RISK_CVAR_ALPHA
+    
+    # CVaR: mean of worst (1-alpha) tail
+    threshold = np.percentile(samples, alpha * 100)
+    tail_samples = samples[samples >= threshold]
+    
+    return np.mean(tail_samples)
+
+
+def compute_win_probability(
+    strategy_samples: np.ndarray,
+    target_time: float
+) -> float:
+    """
+    Compute probability of beating a target time.
+    
+    Args:
+        strategy_samples: Monte Carlo samples of strategy outcomes
+        target_time: Target time to beat (e.g., rival's expected time)
+    
+    Returns:
+        Probability (fraction of samples) beating target
+    """
+    return (strategy_samples < target_time).mean()
+
+
+def rank_strategies_risk_aware(
+    strategies: List[Dict],
+    current_lap: int,
+    total_laps: int,
+    models: Dict,
+    context: Dict,
+    target_time: Optional[float] = None,
+    top_k: int = 10
+) -> pd.DataFrame:
+    """
+    Rank strategies with risk-aware metrics using Monte Carlo.
+    
+    Args:
+        strategies: List of strategy dictionaries
+        current_lap: Current lap
+        total_laps: Total race laps
+        models: Dictionary of trained models
+        context: Race context
+        target_time: Optional target time for win probability
+        top_k: Number of top strategies to return
+    
+    Returns:
+        DataFrame with risk-aware strategy rankings
+    """
+    results = []
+    
+    quantile_models = models.get('quantile_models', None)
+    hazard_model = models.get('hazard_model', None)
+    
+    for strategy in strategies:
+        # Run Monte Carlo simulation
+        mc_result = simulate_strategy_monte_carlo(
+            strategy,
+            current_lap,
+            total_laps,
+            quantile_models,
+            hazard_model,
+            context
+        )
+        
+        # Compute risk metrics
+        samples = mc_result['samples']
+        cvar = compute_cvar(samples)
+        
+        result = {
+            'n_stops': strategy['n_stops'],
+            'stop_laps': json.dumps(strategy['stop_laps']),
+            'compounds': json.dumps(strategy['compounds']),
+            'mean_time_s': mc_result['mean_time_s'],
+            'std_time_s': mc_result['std_time_s'],
+            'p50_time_s': mc_result['p50_time_s'],
+            'p90_time_s': mc_result['p90_time_s'],
+            'p95_time_s': mc_result['p95_time_s'],
+            'cvar_95': cvar,
+            'strategy_json': json.dumps(strategy),
+        }
+        
+        # Add win probability if target provided
+        if target_time is not None:
+            result['p_win_vs_target'] = compute_win_probability(samples, target_time)
+        
+        results.append(result)
+    
+    df = pd.DataFrame(results)
+    
+    if len(df) > 0:
+        # Sort by expected time (P50)
+        df = df.sort_values('p50_time_s').head(top_k)
+        
+        # Add delta to best
+        df['delta_to_best_s'] = df['p50_time_s'] - df['p50_time_s'].min()
+        
+        # Add regret (worst case - best expected)
+        best_p50 = df['p50_time_s'].min()
+        df['regret_p95'] = df['p95_time_s'] - best_p50
+    
+    return df
+
+
 def optimize_strategy(
     current_state: Dict,
     models: Optional[Dict] = None,
-    max_stops: int = 3
+    max_stops: int = 3,
+    risk_aware: bool = False,
+    target_time: Optional[float] = None
 ) -> pd.DataFrame:
     """
-    Main optimization function.
+    Main optimization function with optional risk-aware mode.
     
     Args:
         current_state: Dictionary with current lap, compounds, circuit info, etc.
         models: Dictionary of trained models
         max_stops: Maximum pit stops to consider
+        risk_aware: If True, use Monte Carlo simulation for risk metrics
+        target_time: Optional target time for win probability calculation
     
     Returns:
         DataFrame of recommended strategies
@@ -244,13 +442,24 @@ def optimize_strategy(
     
     print(f"Evaluating {len(strategies)} candidate strategies...")
     
-    # Rank strategies
-    ranked = rank_strategies(
-        strategies,
-        current_lap,
-        total_laps,
-        models,
-        context
-    )
+    # Rank strategies (risk-aware or standard)
+    if risk_aware:
+        print("Using risk-aware Monte Carlo simulation...")
+        ranked = rank_strategies_risk_aware(
+            strategies,
+            current_lap,
+            total_laps,
+            models,
+            context,
+            target_time=target_time
+        )
+    else:
+        ranked = rank_strategies(
+            strategies,
+            current_lap,
+            total_laps,
+            models,
+            context
+        )
     
     return ranked

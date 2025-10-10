@@ -432,3 +432,320 @@ def train_and_evaluate(
     metrics = evaluate(model, X_test, y_test)
     
     return model, metrics
+
+
+def train_quantile(
+    X: pd.DataFrame,
+    y: pd.Series,
+    quantiles: List[float] = [0.5, 0.8, 0.9],
+    cat_cols: Optional[List[str]] = None,
+    monotone_constraints: Optional[dict] = None,
+    params: Optional[dict] = None
+) -> Dict[float, lgb.Booster]:
+    """
+    Train quantile regression models for uncertainty estimation.
+    
+    Args:
+        X: Feature DataFrame
+        y: Target series
+        quantiles: List of quantiles to model (e.g., [0.5, 0.8, 0.9])
+        cat_cols: Categorical feature columns
+        monotone_constraints: Dict of feature -> constraint (-1, 0, 1)
+        params: Optional base LightGBM parameters
+    
+    Returns:
+        Dictionary mapping quantile -> trained model
+    """
+    if cat_cols is None:
+        cat_cols = [col for col in config.CATEGORICAL_FEATURES if col in X.columns]
+    
+    # Convert categorical columns
+    X_train = X.copy()
+    for col in cat_cols:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype('category')
+    
+    # Base parameters
+    if params is None:
+        params = {
+            'boosting_type': 'gbdt',
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.9,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'verbose': -1,
+            'seed': config.LIGHTGBM_SEED,
+        }
+    
+    # Add monotone constraints if provided
+    if monotone_constraints and 'tyre_age_laps' in X.columns:
+        # Monotone increasing with tyre age (degradation increases)
+        feature_names = list(X.columns)
+        constraint_list = [monotone_constraints.get(f, 0) for f in feature_names]
+        params['monotone_constraints'] = constraint_list
+    
+    models = {}
+    
+    for q in quantiles:
+        print(f"Training quantile model for q={q}...")
+        
+        # Set quantile objective
+        q_params = params.copy()
+        q_params['objective'] = 'quantile'
+        q_params['alpha'] = q
+        q_params['metric'] = 'quantile'
+        
+        # Create dataset
+        train_data = lgb.Dataset(
+            X_train,
+            label=y,
+            categorical_feature=cat_cols,
+            free_raw_data=False
+        )
+        
+        # Train model
+        model = lgb.train(
+            q_params,
+            train_data,
+            num_boost_round=200,
+            valid_sets=[train_data],
+            valid_names=['train'],
+            callbacks=[lgb.log_evaluation(0)]
+        )
+        
+        models[q] = model
+        print(f"✓ Quantile q={q} model trained")
+    
+    return models
+
+
+def predict_quantile(
+    models: Dict[float, lgb.Booster],
+    X: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Predict multiple quantiles for uncertainty bands.
+    
+    Args:
+        models: Dictionary of quantile -> model
+        X: Feature DataFrame
+    
+    Returns:
+        DataFrame with columns for each quantile
+    """
+    # Ensure categorical features are properly typed
+    Xp = X.copy()
+    cat_cols = [c for c in config.CATEGORICAL_FEATURES if c in Xp.columns]
+    for col in cat_cols:
+        if not pd.api.types.is_categorical_dtype(Xp[col]):
+            Xp[col] = Xp[col].astype('category')
+    
+    predictions = {}
+    for q, model in models.items():
+        predictions[f'q{int(q*100)}'] = model.predict(Xp, validate_features=False)
+    
+    return pd.DataFrame(predictions)
+
+
+def evaluate_quantile_coverage(
+    models: Dict[float, lgb.Booster],
+    X: pd.DataFrame,
+    y: pd.Series
+) -> dict:
+    """
+    Evaluate quantile coverage (calibration of uncertainty estimates).
+    
+    Args:
+        models: Dictionary of quantile -> model
+        X: Feature DataFrame
+        y: True target values
+    
+    Returns:
+        Dictionary with coverage metrics
+    """
+    predictions = predict_quantile(models, X)
+    
+    coverage_metrics = {}
+    
+    for q in models.keys():
+        q_col = f'q{int(q*100)}'
+        y_pred_q = predictions[q_col]
+        
+        # Coverage: proportion of actual values below quantile prediction
+        coverage = (y <= y_pred_q).mean()
+        
+        # Ideal coverage is q (e.g., 0.9 for 90th percentile)
+        coverage_error = abs(coverage - q)
+        
+        coverage_metrics[f'coverage_q{int(q*100)}'] = coverage
+        coverage_metrics[f'coverage_error_q{int(q*100)}'] = coverage_error
+    
+    # Check if P90 coverage is within target range
+    if 0.9 in models:
+        coverage_p90 = coverage_metrics['coverage_q90']
+        in_range = (config.DEG_QUANTILE_COVERAGE_P90_MIN <= coverage_p90 <= 
+                   config.DEG_QUANTILE_COVERAGE_P90_MAX)
+        coverage_metrics['p90_in_target_range'] = in_range
+    
+    print("Quantile Coverage Evaluation:")
+    for q in models.keys():
+        cov = coverage_metrics[f'coverage_q{int(q*100)}']
+        err = coverage_metrics[f'coverage_error_q{int(q*100)}']
+        print(f"  Q{int(q*100)}: {cov:.3f} (target {q:.2f}, error {err:.3f})")
+    
+    return coverage_metrics
+
+
+def train_with_optuna(
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    cat_cols: Optional[List[str]] = None,
+    n_trials: int = None,
+    timeout: int = None,
+    n_splits: int = 3
+) -> Tuple[lgb.Booster, Dict]:
+    """
+    Train LightGBM model with Optuna hyperparameter optimization.
+    
+    Args:
+        X: Feature DataFrame
+        y: Target series
+        groups: Group labels for GroupKFold
+        cat_cols: Categorical feature columns
+        n_trials: Number of Optuna trials
+        timeout: Timeout in seconds
+        n_splits: Number of CV splits
+    
+    Returns:
+        Tuple of (best model, metrics dict)
+    """
+    try:
+        import optuna
+        from optuna.integration import LightGBMPruningCallback
+    except ImportError:
+        print("Warning: Optuna not installed. Falling back to train_with_cv.")
+        return train_with_cv(X, y, groups, cat_cols, n_splits)
+    
+    if n_trials is None:
+        n_trials = config.HPO_N_TRIALS
+    if timeout is None:
+        timeout = config.HPO_TIMEOUT
+    
+    if cat_cols is None:
+        cat_cols = [col for col in config.CATEGORICAL_FEATURES if col in X.columns]
+    
+    # Convert categorical columns
+    X_train = X.copy()
+    for col in cat_cols:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype('category')
+    
+    # Group K-Fold
+    gkf = GroupKFold(n_splits=n_splits)
+    
+    def objective(trial):
+        # Suggest hyperparameters
+        param = {
+            'objective': 'regression',
+            'metric': 'mae',
+            'boosting_type': 'gbdt',
+            'num_leaves': trial.suggest_int('num_leaves', 20, 100),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+            'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 10, 100),
+            'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 1.0),
+            'bagging_fraction': trial.suggest_float('bagging_fraction', 0.5, 1.0),
+            'bagging_freq': trial.suggest_int('bagging_freq', 1, 10),
+            'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+            'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+            'verbose': -1,
+            'seed': config.LIGHTGBM_SEED,
+        }
+        
+        # Cross-validation
+        fold_scores = []
+        
+        for fold, (train_idx, val_idx) in enumerate(gkf.split(X_train, y, groups)):
+            X_fold_train = X_train.iloc[train_idx]
+            y_fold_train = y.iloc[train_idx]
+            X_fold_val = X_train.iloc[val_idx]
+            y_fold_val = y.iloc[val_idx]
+            
+            train_data = lgb.Dataset(
+                X_fold_train,
+                label=y_fold_train,
+                categorical_feature=cat_cols,
+                free_raw_data=False
+            )
+            
+            val_data = lgb.Dataset(
+                X_fold_val,
+                label=y_fold_val,
+                categorical_feature=cat_cols,
+                reference=train_data,
+                free_raw_data=False
+            )
+            
+            # Train with pruning
+            model = lgb.train(
+                param,
+                train_data,
+                num_boost_round=300,
+                valid_sets=[val_data],
+                valid_names=['val'],
+                callbacks=[
+                    lgb.early_stopping(50),
+                    lgb.log_evaluation(0),
+                    LightGBMPruningCallback(trial, 'mae')
+                ]
+            )
+            
+            y_pred = model.predict(X_fold_val)
+            mae = mean_absolute_error(y_fold_val, y_pred)
+            fold_scores.append(mae)
+        
+        return np.mean(fold_scores)
+    
+    # Run optimization
+    print(f"Running Optuna HPO with {n_trials} trials, {timeout}s timeout...")
+    study = optuna.create_study(direction='minimize', study_name='degradation_hpo')
+    study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=True)
+    
+    print(f"\n✓ Best MAE: {study.best_value/1000.0:.3f}s")
+    print(f"  Best params: {study.best_params}")
+    
+    # Retrain on full data with best params
+    best_params = study.best_params
+    best_params.update({
+        'objective': 'regression',
+        'metric': 'mae',
+        'boosting_type': 'gbdt',
+        'verbose': -1,
+        'seed': config.LIGHTGBM_SEED,
+    })
+    
+    train_data = lgb.Dataset(
+        X_train,
+        label=y,
+        categorical_feature=cat_cols,
+        free_raw_data=False
+    )
+    
+    best_model = lgb.train(
+        best_params,
+        train_data,
+        num_boost_round=300,
+        valid_sets=[train_data],
+        valid_names=['train'],
+        callbacks=[lgb.log_evaluation(0)]
+    )
+    
+    metrics = {
+        'cv_mae_ms': study.best_value,
+        'cv_mae_s': study.best_value / 1000.0,
+        'best_params': study.best_params,
+        'n_trials': len(study.trials),
+    }
+    
+    return best_model, metrics
